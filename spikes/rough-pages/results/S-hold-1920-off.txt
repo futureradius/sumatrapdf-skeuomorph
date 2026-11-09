@@ -1,0 +1,27 @@
+Rough Page spike: hold a key, rough=0, canvas 1958x1200, page 842x1190 at zoom 1.413, 160 pages, 16 logical processors
+Key repeat on this PC: delay 500 ms, then every 33.3 ms (speed 31)
+File: C:\code\sumatrapdf-skeuomorph\.claude\worktrees\spike-rough-pages\spikes\rough-pages\scan.pdf
+Private memory before the copy: 155.1 MB
+
+Burst 1: from page 1, 24 taps in 1233 ms (gap 54 ms), Curls 167-607 ms, at most 5 in the air, 18 landed at once
+  flipped-past pages: 47; with a picture while showing: 5 (sharp 5, Rough 0); blank paper all along: 42
+  each page shows for 200 ms (median), picture arrives 7 ms (median) / 7 ms (90%) after it first shows; time covered by a picture: 0% (median), 10% (mean)
+  Rough Pages finished during the burst: 0 in 1543 ms = 0.0 per second
+  landed Spread (page 49): sharp 518 ms after the last tap; Rough Page not needed / not in time
+
+Burst 2: from page 53, 24 taps in 1233 ms (gap 54 ms), Curls 167-607 ms, at most 5 in the air, 18 landed at once
+  flipped-past pages: 47; with a picture while showing: 5 (sharp 5, Rough 0); blank paper all along: 42
+  each page shows for 200 ms (median), picture arrives 7 ms (median) / 8 ms (90%) after it first shows; time covered by a picture: 0% (median), 10% (mean)
+  Rough Pages finished during the burst: 0 in 1543 ms = 0.0 per second
+  landed Spread (page 101): sharp 522 ms after the last tap; Rough Page not needed / not in time
+
+Burst 3: from page 105, 24 taps in 1233 ms (gap 54 ms), Curls 167-607 ms, at most 5 in the air, 18 landed at once
+  flipped-past pages: 47; with a picture while showing: 5 (sharp 5, Rough 0); blank paper all along: 42
+  each page shows for 200 ms (median), picture arrives 8 ms (median) / 8 ms (90%) after it first shows; time covered by a picture: 0% (median), 10% (mean)
+  Rough Pages finished during the burst: 0 in 1543 ms = 0.0 per second
+  landed Spread (page 153): sharp 538 ms after the last tap; Rough Page not needed / not in time
+
+All bursts: 141 flipped-past pages, 15 (11%) showed a picture (15 sharp), 126 blank all along; time covered 10% (mean)
+Rough Pages: 0 drawn, 0 thrown away unfinished or unneeded, 0 failed; draw time median 0 ms, 90% 0 ms, max 0 ms
+Rough Pages held at once: at most 0, 0.0 MB (CPU memory)
+Private memory at the end 371.9 MB, peak 380.1 MB

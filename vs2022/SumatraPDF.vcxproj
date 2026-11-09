@@ -1412,6 +1412,7 @@
     <ClInclude Include="..\ext\darkmodelib\src\Version.h" />
     <ClInclude Include="..\src\BrightnessContrastDialog.h" />
     <ClInclude Include="..\src\Canvas.h" />
+    <ClInclude Include="..\src\skeuomorph\SpikeRoughPages.h" />
     <ClInclude Include="..\src\DarkMode.h" />
     <ClInclude Include="..\src\FindWindow.h" />
     <ClInclude Include="..\src\HexView.h" />
@@ -1665,6 +1666,7 @@
     </ClCompile>
     <ClCompile Include="..\src\BrightnessContrastDialog.cpp" />
     <ClCompile Include="..\src\Canvas.cpp" />
+    <ClCompile Include="..\src\skeuomorph\SpikeRoughPages.cpp" />
     <ClCompile Include="..\src\CanvasAboutUI.cpp" />
     <ClCompile Include="..\src\ChangeColorDialog.cpp" />
     <ClCompile Include="..\src\ChangeLanguageDialog.cpp" />

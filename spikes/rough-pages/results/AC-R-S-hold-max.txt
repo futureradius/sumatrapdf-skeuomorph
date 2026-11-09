@@ -1,0 +1,29 @@
+Rough Page spike: hold a key, rough=1, canvas 3840x2170, page 1528x2160 at zoom 2.566, 160 pages, 16 logical processors
+Key repeat on this PC: delay 500 ms, then every 33.3 ms (speed 31)
+File: C:\code\sumatrapdf-skeuomorph\.claude\worktrees\spike-rough-pages\spikes\rough-pages\scan.pdf
+Private memory before the copy: 251.6 MB
+Background copy (Clone): 5.3 ms, private memory 251.6 -> 253.5 MB (+1.9)
+
+Burst 1: from page 1, 24 taps in 1233 ms (gap 54 ms), Curls 166-607 ms, at most 5 in the air, 18 landed at once
+  flipped-past pages: 47; with a picture while showing: 29 (sharp 5, Rough 24); blank paper all along: 18
+  each page shows for 200 ms (median), picture arrives 155 ms (median) / 200 ms (90%) after it first shows; time covered by a picture: 4% (median), 27% (mean)
+  Rough Pages finished during the burst: 26 in 1543 ms = 16.8 per second
+  landed Spread (page 49): sharp 310 ms after the last tap; Rough Page arrived first
+
+Burst 2: from page 53, 24 taps in 1233 ms (gap 54 ms), Curls 167-607 ms, at most 5 in the air, 18 landed at once
+  flipped-past pages: 47; with a picture while showing: 27 (sharp 5, Rough 22); blank paper all along: 20
+  each page shows for 200 ms (median), picture arrives 133 ms (median) / 199 ms (90%) after it first shows; time covered by a picture: 5% (median), 27% (mean)
+  Rough Pages finished during the burst: 24 in 1543 ms = 15.6 per second
+  landed Spread (page 101): sharp 497 ms after the last tap; Rough Page arrived first
+
+Burst 3: from page 105, 24 taps in 1233 ms (gap 54 ms), Curls 166-607 ms, at most 5 in the air, 18 landed at once
+  flipped-past pages: 47; with a picture while showing: 27 (sharp 5, Rough 22); blank paper all along: 20
+  each page shows for 200 ms (median), picture arrives 136 ms (median) / 198 ms (90%) after it first shows; time covered by a picture: 5% (median), 26% (mean)
+  Rough Pages finished during the burst: 25 in 1543 ms = 16.2 per second
+  landed Spread (page 153): sharp 401 ms after the last tap; Rough Page arrived first
+
+All bursts: 141 flipped-past pages, 83 (59%) showed a picture (15 sharp), 58 blank all along; time covered 27% (mean)
+Rough Pages: 75 drawn, 26 thrown away unfinished or unneeded, 0 failed; draw time median 29 ms, 90% 31 ms, max 34 ms
+Rough Pages held at once: at most 6, 18.9 MB (CPU memory)
+Private memory at the end 579.8 MB, peak 595.2 MB
+Releasing the copy: private memory 579.7 MB, after emptying its MuPDF cache 579.8 MB, after closing it 523.9 MB

@@ -159,6 +159,7 @@
 #include "OpenFromUrlCommon.h"
 #include "AppHelpersCommon.h"
 #include "SumatraLog.h"
+#include "skeuomorph/SpikeRoughPages.h"
 
 using Gdiplus::Graphics;
 using Gdiplus::Pen;
@@ -964,6 +965,7 @@ struct ControllerCallbackHandler : DocControllerCallback {
     void FindAllResultReceived(Str payload) override { BrowserFindAllResultReceived(win, payload); }
     void TocChanged(DocController* ctrl) override;
     void PagesRenumbered(DisplayModel* dm) override;
+    void BeforeSpreadChange(DisplayModel* dm, int pageNo) override { SpikeBeforeSpreadChange(win, dm, pageNo); }
 };
 
 void ControllerCallbackHandler::TocChanged(DocController* ctrl) {
