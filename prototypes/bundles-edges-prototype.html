@@ -1,0 +1,1031 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE - Bundles and Page Edges</title>
+<!--
+  PROTOTYPE, throwaway. Answers the ticket "What should Bundles and Page Edges look like?"
+  (futureradius/sumatrapdf-skeuomorph#9).
+  Three Page Edges styles on one page, switched with ?variant=A|B|C or the bottom bar.
+  Builds on the Curl prototype (#8) with the Curl look already decided there:
+  corner peel, bend 17%, corner lead 35°, shadow 30%, light 30%, depth 70%, 700 ms,
+  fast tapping = gap × 4 (never below 310 ms), at most 5 in the air, Single Page fades away.
+  Open by double-clicking (Edge). Nothing is saved; reload resets everything.
+  URL extras for screenshots: &view=book|facing|single &page=N &pages=N &hold=0..1 &holdPages=N
+-->
+<style>
+:root { --desk:#8c8c8c; --panel:#f4f4f2; --ink:#222; --muted:#666; --accent:#2b5fd9; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; font:13px/1.4 "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--desk); overflow:hidden; }
+#app { display:flex; height:100%; }
+#stage { flex:1; position:relative; min-width:0; }
+#under, #gl { position:absolute; inset:0; width:100%; height:100%; display:block; }
+#gl { cursor:pointer; }
+#tag { position:absolute; top:8px; left:8px; background:#ffd84d; color:#000; padding:3px 8px; border-radius:4px; font-weight:600; font-size:12px; pointer-events:none; }
+#panel { width:350px; flex:none; background:var(--panel); overflow-y:auto; padding:12px 14px 90px; border-left:1px solid #bbb; }
+#panel h1 { font-size:15px; margin:0 0 4px; }
+h2 { font-size:12px; margin:18px 0 6px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); border-bottom:1px solid #ddd; padding-bottom:3px; }
+.row { margin:6px 0 12px; }
+.row label { display:flex; justify-content:space-between; gap:8px; }
+.row .val { font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600; white-space:nowrap; }
+.row input[type=range] { width:100%; margin:3px 0 0; }
+.hint { color:var(--muted); font-size:12px; margin-top:1px; }
+.seg { display:flex; margin-top:3px; }
+.seg button { flex:1; border:1px solid #aaa; background:#fff; padding:4px 2px; font:inherit; font-size:12px; cursor:pointer; }
+.seg button + button { border-left:none; }
+.seg button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.jumps { display:flex; gap:4px; flex-wrap:wrap; margin:4px 0; }
+.jumps button { flex:1; padding:4px 0; font:inherit; font-size:12px; cursor:pointer; }
+.goto { display:flex; gap:4px; margin-top:4px; }
+.goto input { width:80px; font:inherit; }
+.check { display:flex; gap:6px; align-items:center; margin:6px 0; }
+#state { background:#fff; border:1px solid #ccc; border-radius:4px; padding:8px; font:12px/1.55 Consolas, monospace; white-space:pre; min-height:120px; overflow-x:auto; }
+#desc { background:#fff; border-left:3px solid var(--accent); padding:6px 8px; margin:8px 0; }
+#todo { margin:6px 0 0; padding-left:18px; }
+#todo li { margin:2px 0; }
+button.big { width:100%; padding:7px; font:inherit; font-weight:600; cursor:pointer; margin-top:4px; }
+#copyOut { width:100%; height:200px; font:12px Consolas, monospace; display:none; margin-top:6px; }
+#switcher { position:fixed; bottom:16px; left:calc((100% - 350px) / 2); transform:translateX(-50%); display:flex; align-items:center; gap:10px; background:#111; color:#fff; padding:6px 10px; border-radius:999px; box-shadow:0 4px 14px rgba(0,0,0,.45); user-select:none; z-index:10; }
+#switcher button { background:#333; color:#fff; border:none; width:30px; height:30px; border-radius:50%; font-size:15px; cursor:pointer; }
+#switcher .lbl { min-width:190px; text-align:center; font-weight:600; line-height:1.2; }
+#switcher .k { opacity:.6; font-size:11px; font-weight:400; display:block; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="under"></canvas>
+    <canvas id="gl"></canvas>
+    <div id="tag">PROTOTYPE, throwaway</div>
+  </div>
+  <aside id="panel">
+    <h1>What should Bundles and Page Edges look like?</h1>
+    <div class="hint">One Spread: <b>→</b> / <b>←</b> (or click the right / left half). Jump 10 pages: <b>Shift + → / ←</b>. Start / end: <b>Home</b> / <b>End</b>. Or use the jump buttons. <b>[</b> and <b>]</b> switch the Page Edges style.</div>
+    <div id="desc"></div>
+    <div class="hint">To decide:</div>
+    <ol id="todo" class="hint">
+      <li>Which Page Edges style (bottom bar).</li>
+      <li>How thick Page Edges are, for short and long books (try Book length).</li>
+      <li>How thick a Bundle is: per page, and at most.</li>
+      <li>How a Bundle lifts and lands, and when the Page Edges change.</li>
+      <li><s>Page Edges in Single Page view</s>: decided, only the unread pages. Read pages just disappear.</li>
+    </ol>
+
+    <h2>Document</h2>
+    <div id="sec-doc"></div>
+
+    <h2>Jump</h2>
+    <div class="jumps">
+      <button data-j="start">⏮ Start</button><button data-j="-50">−50</button><button data-j="-10">−10</button>
+      <button data-j="10">+10</button><button data-j="50">+50</button><button data-j="end">End ⏭</button>
+    </div>
+    <div class="goto"><span class="hint" style="align-self:center">Go to page</span><input id="gotoN" type="number" min="1"><button id="gotoB">Go</button></div>
+
+    <h2>Page Edges</h2>
+    <div id="sec-edges"></div>
+
+    <h2>Bundle</h2>
+    <div id="sec-bundle"></div>
+
+    <h2>Study one Bundle</h2>
+    <label class="check"><input type="checkbox" id="slowmo"> Slow motion (5× slower)</label>
+    <label class="check"><input type="checkbox" id="hold"> Freeze a Bundle at this point:</label>
+    <div class="row"><input type="range" id="holdT" min="0" max="1" step="0.01" value="0.45"></div>
+    <div class="row"><label><span>Pages in the frozen Bundle</span><span class="val" id="holdPagesV"></span></label><input type="range" id="holdPages" min="2" max="200" step="1" value="40"></div>
+
+    <h2>What's happening</h2>
+    <div id="state"></div>
+
+    <h2>Done?</h2>
+    <button class="big" id="copy">Copy my choices</button>
+    <div class="hint">Paste the copied text back into the chat.</div>
+    <textarea id="copyOut" readonly></textarea>
+  </aside>
+</div>
+<div id="switcher">
+  <button id="prev" title="Previous style ( [ )">◀</button>
+  <div class="lbl"><span id="vlabel"></span><span class="k">Page Edges style · [ and ] keys</span></div>
+  <button id="next" title="Next style ( ] )">▶</button>
+</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+
+// ---------- fake document ----------
+let PAGES = 300;
+const ASPECT = 600 / 776; // US Letter width / height
+const PAPER_RGB = [251 / 255, 248 / 255, 241 / 255];
+const pagesFromV = v => Math.round(4 * Math.pow(750, v)); // 4 .. 3000 pages
+const vFromPages = p => Math.log(p / 4) / Math.log(750);
+
+// ---------- Curl, as decided in #8 ----------
+const CURL = { radius: 0.17, lead: 35, shadow: 0.3, shading: 0.3, depth: 0.7, dur: 700, tapFactor: 4, fastest: 310, maxAir: 5 };
+
+// ---------- the three Page Edges styles ----------
+const VARIANTS = [
+  { key: 'A', name: 'Side lines', desc: '<b>A · Side lines.</b> A strip of fine paper lines beside the outer edge of each page, the full page height. Flat, seen straight from above.' },
+  { key: 'B', name: 'Stepped stack', desc: '<b>B · Stepped stack.</b> The sheets under the page peek out to the side <i>and</i> below, each a little further, like a book seen slightly from above.' },
+  { key: 'C', name: 'Soft block', desc: '<b>C · Soft block.</b> No single lines: a smooth, rounded band of paper with a soft shadow, like the edge of a book seen from a distance.' },
+];
+
+// ---------- controls ----------
+const px = v => (v < 1 ? v.toFixed(2) : v.toFixed(v < 10 ? 1 : 0)) + ' px';
+// [section, key, label, min, max, step, default, format, hint]
+const SLIDERS = [
+  ['doc', 'bookLen', 'Book length', 0, 1, 0.001, vFromPages(300), v => pagesFromV(v) + ' pages', 'Try a 20-page leaflet and a 2000-page manual.'],
+  ['edges', 'edgePer', 'Thickness per page', 0.02, 1, 0.01, 0.12, px, 'How thick one page of the whole book is (the book\'s total, split between the two sides).'],
+  ['edges', 'edgeMax', 'Whole book at most', 6, 120, 1, 46, px, 'A long book never gets thicker than this.'],
+  ['edges', 'edgeMin', 'Whole book at least', 0, 30, 1, 4, px, 'So even a short book shows a little paper.'],
+  ['bundle', 'bunPer', 'Thickness per page', 0.02, 1, 0.01, 0.7, px, 'A small skip is a thin Bundle, a big skip a thick one.'],
+  ['bundle', 'bunMax', 'Bundle at most', 2, 40, 1, 18, px, 'A huge jump never makes a thicker Bundle than this.'],
+  ['bundle', 'fan', 'Fan out', 0, 1, 0.05, 0.2, v => Math.round(v * 100) + '%', '0% = one solid block. More = the sheets spread apart and land one after another.'],
+  ['bundle', 'stiff', 'Stiffer than one page', 0, 1, 0.05, 0.4, v => Math.round(v * 100) + '%', 'A thick Bundle bends in a wider roll and its corner leads less.'],
+  ['bundle', 'bunDur', 'Bundle duration', 1, 2.5, 0.05, 1.3, v => '× ' + v.toFixed(2) + ' = ' + Math.round(v * CURL.dur) + ' ms', 'Compared to one Curl (700 ms). Fast tapping shortens it the same way.'],
+];
+// [section, key, label, options "value:Label|...", default]
+const SEGS = [
+  ['doc', 'view', 'Paged View', 'single:Single Page|facing:Facing|book:Book View', 'book'],
+  ['edges', 'model', 'Short versus long books', 'linear:Per page, capped|sqrt:Grows slowly|fixed:Same for all', 'sqrt'],
+  ['edges', 'timing', 'Page Edges change', 'once:At once|follow:As Bundle lifts / lands|smooth:Gradually', 'follow'],
+];
+const MODEL_HINT = {
+  linear: 'Thickness grows with page count until it hits the maximum. Long books all look equally thick.',
+  sqrt: 'Short books are a bit thicker than "per page", long books grow slowly up to the maximum.',
+  fixed: 'Every book is as thick as the maximum. Only your position shows, not the book\'s length.',
+};
+
+const params = new URLSearchParams(location.search);
+const opts = {};
+let VARIANT = (params.get('variant') || 'A').toUpperCase();
+if (!VARIANTS.some(v => v.key === VARIANT)) VARIANT = 'A';
+
+function onOptChange(key) {
+  if (key === 'bookLen') {
+    const before = currentPage();
+    PAGES = pagesFromV(opts.bookLen);
+    flights.length = 0;
+    setPage(Math.min(before, PAGES));
+  }
+  if (key === 'view') flights.length = 0;
+  if (key === 'model') $('#modelHint').textContent = MODEL_HINT[opts.model];
+}
+
+function buildControls() {
+  for (const [sec, key, label, min, max, step, def, fmt, hint] of SLIDERS) {
+    opts[key] = def;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label><span>${label}</span><span class="val"></span></label>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${def}">
+      ${hint ? `<div class="hint">${hint}</div>` : ''}`;
+    const input = row.querySelector('input'), val = row.querySelector('.val');
+    const show = () => { opts[key] = parseFloat(input.value); val.textContent = fmt(opts[key]); };
+    input.addEventListener('input', () => { show(); onOptChange(key); });
+    input.addEventListener('change', () => input.blur()); // keep arrow keys for turning pages
+    if (key === 'bookLen' && params.has('pages')) input.value = vFromPages(Math.max(4, Math.min(3000, +params.get('pages'))));
+    show();
+    $('#sec-' + sec).appendChild(row);
+  }
+  for (const [sec, key, label, optStr, def] of SEGS) {
+    opts[key] = params.get(key) || def;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label><span>${label}</span></label><div class="seg"></div>` + (key === 'model' ? '<div class="hint" id="modelHint"></div>' : '');
+    const seg = row.querySelector('.seg');
+    for (const o of optStr.split('|')) {
+      const [value, text] = o.split(':');
+      const b = document.createElement('button');
+      b.textContent = text;
+      b.classList.toggle('on', value === opts[key]);
+      b.onclick = () => {
+        const before = currentPage();
+        opts[key] = value;
+        seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+        b.blur();
+        onOptChange(key);
+        if (key === 'view') setPage(before);
+      };
+      seg.appendChild(b);
+    }
+    $('#sec-' + sec).appendChild(row);
+  }
+  PAGES = pagesFromV(opts.bookLen);
+  $('#modelHint').textContent = MODEL_HINT[opts.model];
+}
+
+function refreshVariant() {
+  const v = VARIANTS.find(v => v.key === VARIANT);
+  $('#vlabel').textContent = `${v.key} (${v.name})`;
+  $('#desc').innerHTML = v.desc;
+}
+function cycleVariant(d) {
+  const i = VARIANTS.findIndex(v => v.key === VARIANT);
+  VARIANT = VARIANTS[(i + d + VARIANTS.length) % VARIANTS.length].key;
+  try { history.replaceState(null, '', '?variant=' + VARIANT); } catch (e) { location.hash = 'variant=' + VARIANT; }
+  refreshVariant();
+}
+
+// ---------- book model ----------
+// A leaf is one physical sheet: front page on the right, back page on the left once turned.
+// L = number of leaves turned. Leaves i < L lie on the left, i >= L on the right.
+// A flight is one Page Turn in the air: leaves lo..hi-1 travelling together.
+// One leaf = a normal Curl; more = a Bundle.
+// t: 0 = flat on right .. 1 = flat on left. style 'fwd' started on the right, 'back' on the left.
+let L = 0;
+const flights = [];
+let tempo = CURL.dur;
+let lastTap = -1e9, lastGap = null;
+
+function leafPages(i) {
+  const pg = x => (x >= 1 && x <= PAGES ? x : 0); // 0 = blank paper
+  if (opts.view === 'single') return { front: i + 1, back: 0 }; // decided in #8: blank back
+  if (opts.view === 'book') return { front: 2 * i + 1, back: pg(2 * i + 2) };
+  return { front: 2 * i + 2, back: pg(2 * i + 3) };
+}
+const leafExists = i => i >= 0 && i < leafCount();
+function leafCount() {
+  if (opts.view === 'single') return PAGES;
+  if (opts.view === 'book') return Math.ceil(PAGES / 2);
+  return Math.ceil((PAGES - 1) / 2);
+}
+const pagesPerLeaf = () => (opts.view === 'single' ? 1 : 2);
+function maxL() {
+  if (opts.view === 'single') return PAGES - 1;
+  if (opts.view === 'book') return Math.floor(PAGES / 2);
+  return Math.floor((PAGES - 1) / 2);
+}
+function currentPage(l = L) {
+  if (opts.view === 'single') return l + 1;
+  if (opts.view === 'book') return l === 0 ? 1 : 2 * l;
+  return 2 * l + 1;
+}
+function leavesFor(p) {
+  let l;
+  if (opts.view === 'single') l = p - 1;
+  else if (opts.view === 'book') l = Math.floor(p / 2);
+  else l = Math.floor((p - 1) / 2);
+  return Math.max(0, Math.min(maxL(), l));
+}
+function setPage(p) { L = leavesFor(p); }
+function spreadText(l = L) {
+  const ok = p => p >= 1 && p <= PAGES;
+  if (opts.view === 'single') return 'page ' + (l + 1);
+  const left = opts.view === 'book' ? 2 * l : 2 * l + 1, right = left + 1;
+  return 'pages ' + [left, right].filter(ok).join('–');
+}
+
+function noteTap() {
+  const now = performance.now();
+  const gap = now - lastTap;
+  lastTap = now;
+  lastGap = gap < 3000 ? gap : null;
+  tempo = gap < CURL.dur ? Math.min(CURL.dur, Math.max(CURL.fastest, gap * CURL.tapFactor)) : CURL.dur;
+  return now;
+}
+
+// Move to leaf count newL: one Page Turn, so one Curl or one Bundle.
+function turnTo(newL) {
+  newL = Math.max(0, Math.min(maxL(), newL));
+  if (newL === L) return;
+  const now = noteTap();
+  const n = newL - L;
+
+  if (Math.abs(n) === 1) {
+    // A page (or the last sheet of a Bundle) still in the air goes back from where it is.
+    const f = n < 0 ? flights.find(f => f.hi === L && f.target === 1) : flights.find(f => f.lo === L && f.target === 0);
+    if (f && f.hi - f.lo === 1) { f.target = n > 0 ? 1 : 0; L = newL; return; }
+    if (f) {
+      if (n < 0) { f.hi -= 1; flights.push({ lo: L - 1, hi: L, t: f.t, target: 0, style: f.style, born: now }); }
+      else { f.lo += 1; flights.push({ lo: L, hi: L + 1, t: f.t, target: 1, style: f.style, born: now }); }
+      L = newL;
+      return;
+    }
+  }
+
+  const lo = Math.min(L, newL), hi = Math.max(L, newL);
+  // Anything already in the air inside this range lands at once.
+  for (let k = flights.length - 1; k >= 0; k--) if (flights[k].lo < hi && flights[k].hi > lo) flights.splice(k, 1);
+  flights.push(n > 0 ? { lo, hi, t: 0, target: 1, style: 'fwd', born: now } : { lo, hi, t: 1, target: 0, style: 'back', born: now });
+  L = newL;
+
+  while (flights.length > CURL.maxAir) {
+    let oldest = 0;
+    for (let k = 1; k < flights.length; k++) if (flights[k].born < flights[oldest].born) oldest = k;
+    flights.splice(oldest, 1);
+  }
+}
+const step = d => turnTo(L + d);
+const jumpPages = d => turnTo(leavesFor(currentPage() + d));
+
+function update(dt) {
+  const now = performance.now();
+  if (now - lastTap > tempo * 1.5) tempo += (CURL.dur - tempo) * Math.min(1, dt / 250); // calm down after fast tapping
+  const slow = $('#slowmo').checked ? 0.2 : 1;
+  for (let k = flights.length - 1; k >= 0; k--) {
+    const f = flights[k];
+    const dur = tempo * (f.hi - f.lo > 1 ? opts.bunDur : 1);
+    const s = (dt / dur) * slow;
+    f.t += f.target > f.t ? s : -s;
+    if ((f.target === 1 && f.t >= 1) || (f.target === 0 && f.t <= 0)) flights.splice(k, 1);
+  }
+}
+
+// ---------- thickness ----------
+function bookThickness() {
+  const raw = PAGES * opts.edgePer;
+  let w;
+  if (opts.model === 'fixed') w = opts.edgeMax;
+  else if (opts.model === 'sqrt') w = Math.sqrt(raw * opts.edgeMax);
+  else w = raw;
+  return Math.max(opts.edgeMin, Math.min(opts.edgeMax, w));
+}
+function bundleThickness(nLeaves) { return Math.min(opts.bunMax, nLeaves * pagesPerLeaf() * opts.bunPer); }
+function sheetsFor(nLeaves) {
+  if (nLeaves <= 1) return 1;
+  return Math.max(2, Math.min(nLeaves, 14, Math.round(bundleThickness(nLeaves) / 1.1)));
+}
+
+const easeIO = t => 0.5 - 0.5 * Math.cos(Math.PI * t);
+const smooth = (a, b, x) => { x = Math.min(1, Math.max(0, (x - a) / (b - a))); return x * x * (3 - 2 * x); };
+
+// Shape of one flight: how many sheets are drawn, and how much each lags the one above it.
+function flightGeom(f) {
+  const n = f.hi - f.lo;
+  const K = sheetsFor(n);
+  const T = n > 1 ? bundleThickness(n) : 0;
+  const lag = K > 1 ? (T / K) / lastLay.frame.Lu * 0.7 + opts.fan * 0.45 / (K - 1) : 0;
+  return { n, K, T, lag, maxLag: lag * (K - 1) };
+}
+const sheetProgress = (s, jt, geo) => Math.min(1, Math.max(0, (s - jt * geo.lag) / (1 - geo.maxLag)));
+
+// Page Edges: how many leaves lie on each side right now (fractions while a Bundle is in the air).
+// "As Bundle lifts / lands": the start side shrinks as the Bundle's bottom sheet lifts off it,
+// the end side grows as the Bundle lands.
+// gLeft / gRight count a sheet on its start side until it lands: the spine shadow they drive
+// must stay until the turning page has swept over it.
+function edgeLeaves(st) {
+  let left = st.L, right = leafCount() - st.L;
+  let gLeft = left, gRight = right;
+  for (const f of st.flights) {
+    const geo = flightGeom(f);
+    if (f.target === 1) { left -= geo.n; gLeft -= geo.n; } else { right -= geo.n; gRight -= geo.n; }
+    const sArr = smooth(0.82, 1, f.style === 'fwd' ? f.t : 1 - f.t);
+    if (f.style === 'fwd') { gRight += geo.n * (1 - sArr); gLeft += geo.n * sArr; }
+    else { gLeft += geo.n * (1 - sArr); gRight += geo.n * sArr; }
+    const s = f.style === 'fwd' ? f.t : 1 - f.t;
+    let depart, arrive;
+    if (opts.timing === 'once') depart = arrive = f.style === 'fwd' ? f.target : 1 - f.target;
+    else if (opts.timing === 'smooth') depart = arrive = easeIO(s);
+    else {
+      depart = smooth(0.01, 0.12, easeIO(sheetProgress(s, geo.K - 1, geo)));
+      arrive = smooth(0.82, 1, s);
+    }
+    const onStart = geo.n * (1 - depart), onEnd = geo.n * arrive;
+    if (f.style === 'fwd') { right += onStart; left += onEnd; }
+    else { left += onStart; right += onEnd; }
+  }
+  return { left: Math.max(0, left), right: Math.max(0, right), gLeft, gRight };
+}
+
+// ---------- page pictures ----------
+const WORDS = 'the of and a to in is you that it he was for on are as with his they at be this have from or one had by word but not what all were we when your can said there use an each which she do how their if will up other about out many then them these so some her would make like him into time has look two more write go see number no way could people my than first water been call who oil its now find long down day did get come made may part'.split(' ');
+function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+const PW = 800, PH = Math.round(800 / ASPECT);
+function drawPage(n) {
+  const c = document.createElement('canvas');
+  c.width = PW; c.height = PH;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgb(251,248,241)';
+  g.fillRect(0, 0, PW, PH);
+  if (n === 0) return c; // blank paper
+
+  const r = rng(n * 9973);
+  const M = 72;
+  g.fillStyle = 'rgba(0,0,0,0.055)';
+  g.font = 'bold ' + (n > 999 ? 260 : 360) + 'px Georgia';
+  g.textAlign = 'center';
+  g.fillText(String(n), PW / 2, PH / 2 + 125);
+
+  const chapter = Math.floor((n - 1) / 12) + 1;
+  g.fillStyle = '#888';
+  g.font = 'italic 19px Georgia';
+  g.textAlign = n % 2 ? 'right' : 'left';
+  g.fillText('Chapter ' + chapter, n % 2 ? PW - M : M, 56);
+
+  g.textAlign = 'left';
+  let y = 112;
+  if ((n - 1) % 12 === 0) {
+    g.fillStyle = '#222';
+    g.font = 'bold 46px Georgia';
+    g.fillText('Chapter ' + chapter, M, 175);
+    y = 250;
+  }
+  const lineH = 32, bottom = PH - 100, width = PW - 2 * M;
+  let figureDone = n % 5 !== 3;
+  g.font = '21px Georgia';
+  while (y < bottom) {
+    if (!figureDone && y > 330) {
+      const h = 260;
+      g.strokeStyle = '#555'; g.lineWidth = 2;
+      g.strokeRect(M, y - 20, width, h);
+      g.fillStyle = '#d9e2ef'; g.fillRect(M + 1, y - 19, width - 2, h - 2);
+      g.fillStyle = '#7d93b5';
+      g.beginPath(); g.moveTo(M, y + h - 20); g.lineTo(M + width * 0.35, y + 40); g.lineTo(M + width * 0.55, y + 140); g.lineTo(M + width * 0.75, y + 70); g.lineTo(M + width, y + h - 20); g.fill();
+      g.fillStyle = '#e8b04a'; g.beginPath(); g.arc(M + width * 0.82, y + 30, 26, 0, 7); g.fill();
+      g.fillStyle = '#666'; g.font = 'italic 17px Georgia';
+      g.fillText('Figure ' + n + '. A view from the hill.', M, y + h + 10);
+      g.font = '21px Georgia';
+      y += h + 50;
+      figureDone = true;
+      continue;
+    }
+    const lines = 3 + Math.floor(r() * 6);
+    g.fillStyle = '#2a2a2a';
+    for (let k = 0; k < lines && y < bottom; k++) {
+      const last = k === lines - 1;
+      const indent = k === 0 ? 34 : 0;
+      const maxChars = ((width - indent) / 10.4) * (last ? 0.3 + r() * 0.5 : 1);
+      let s = '';
+      while (s.length < maxChars) s += WORDS[Math.floor(r() * WORDS.length)] + ' ';
+      if (k === 0) s = s[0].toUpperCase() + s.slice(1);
+      g.fillText(s.trim() + (last ? '.' : ''), M + indent, y, last ? undefined : width - indent);
+      y += lineH;
+    }
+    y += 12;
+  }
+  g.textAlign = 'center';
+  g.fillStyle = '#555';
+  g.font = '19px Georgia';
+  g.fillText(String(n), PW / 2, PH - 46);
+  return c;
+}
+
+// ---------- WebGL (pages and Curls) ----------
+const canvas = $('#gl');
+const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, premultipliedAlpha: true });
+if (!gl) document.body.innerHTML = '<p style="padding:20px">This prototype needs WebGL 2, which Edge has. Try updating Edge.</p>';
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.bindAttribLocation(p, 0, 'aPos');
+  gl.bindAttribLocation(p, 1, 'aUV');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name] = gl.getUniformLocation(p, info.name); }
+  return { p, u };
+}
+
+const PAGE_VS = `#version 300 es
+in vec3 aPos; in vec2 aUV;
+uniform mat4 uMVP; uniform vec3 uMapX, uMapY;
+out vec2 vTex; out vec3 vPos; out float vU;
+void main() {
+  vPos = aPos; vU = aUV.x;
+  vTex = vec2(dot(uMapX, vec3(aUV, 1.0)), dot(uMapY, vec3(aUV, 1.0)));
+  gl_Position = uMVP * vec4(aPos, 1.0);
+}`;
+// uEdge: a thin darker line along the sheet's free edge, so the sheets of a Bundle read as a stack.
+// uTint: sheets in a Bundle alternate very slightly in tone.
+const PAGE_FS = `#version 300 es
+precision highp float;
+in vec2 vTex; in vec3 vPos; in float vU;
+uniform sampler2D uTex;
+uniform float uShade, uAlpha, uGutter, uLu, uEdge, uTint;
+uniform vec3 uEye;
+out vec4 o;
+void main() {
+  vec3 c = texture(uTex, vTex).rgb * uTint;
+  vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
+  vec3 V = normalize(uEye - vPos);
+  if (dot(n, V) < 0.0) n = -n;
+  vec3 Ld = normalize(vec3(-0.35, 0.45, 1.0));
+  float diff = max(dot(n, Ld), 0.0) / Ld.z;
+  float spec = pow(max(dot(n, normalize(Ld + V)), 0.0), 50.0) * (1.0 - n.z);
+  c *= mix(1.0, 0.2 + 0.8 * diff, uShade);
+  c += uShade * 0.35 * spec;
+  c *= 1.0 - uGutter * 0.22 * exp(-vU * uLu / 22.0);
+  c *= 1.0 - uEdge * 0.45 * smoothstep(1.0 - 2.2 / uLu, 1.0, vU);
+  o = vec4(c, uAlpha);
+}`;
+const SHADOW_VS = `#version 300 es
+in vec3 aPos;
+uniform mat4 uMVP; uniform vec2 uOff;
+out float vZ;
+void main() {
+  vZ = aPos.z;
+  vec2 xy = aPos.xy + vec2(0.22, -0.28) * aPos.z + uOff * (1.0 + aPos.z * 0.035);
+  gl_Position = uMVP * vec4(xy, 0.0, 1.0);
+}`;
+const SHADOW_FS = `#version 300 es
+precision highp float;
+in float vZ;
+uniform float uS, uLu;
+out vec4 o;
+void main() {
+  float a = uS * smoothstep(1.5, uLu * 0.08, vZ) * (1.0 - 0.65 * smoothstep(0.0, uLu * 0.9, vZ));
+  o = vec4(0.0, 0.0, 0.0, a);
+}`;
+
+const pageProg = program(PAGE_VS, PAGE_FS);
+const shadowProg = program(SHADOW_VS, SHADOW_FS);
+
+const NU = 64, NV = 40;
+const VCOUNT = (NU + 1) * (NV + 1);
+const pos = new Float32Array(VCOUNT * 3);
+const uvs = new Float32Array(VCOUNT * 2);
+const idx = new Uint16Array(NU * NV * 6);
+for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) { const k = j * (NU + 1) + i; uvs[k * 2] = i / NU; uvs[k * 2 + 1] = j / NV; }
+for (let j = 0, q = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+  const a = j * (NU + 1) + i, b = a + 1, c = a + NU + 1, d = c + 1;
+  idx.set([a, b, c, b, d, c], q); q += 6;
+}
+const vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
+const posBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, pos.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+const uvBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf); gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
+const idxBuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+
+const texCache = new Map();
+function pageTex(n) {
+  if (texCache.has(n)) { const t = texCache.get(n); texCache.delete(n); texCache.set(n, t); return t; }
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, drawPage(n));
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  texCache.set(n, tex);
+  if (texCache.size > 60) { const k = texCache.keys().next().value; gl.deleteTexture(texCache.get(k)); texCache.delete(k); }
+  return tex;
+}
+
+// ---------- layout ----------
+// World units = screen pixels on the page plane (z = 0); z points toward you.
+const MAPS = { front: [[1, 0, 0], [0, 1, 0]], back: [[-1, 0, 1], [0, 1, 0]] };
+function layout() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const single = opts.view === 'single';
+  // Room for the thickest Page Edges, so pages don't change size as you read.
+  const room = opts.edgeMax + 6;
+  const availW = w * 0.94 - 2 * room, availH = h * 0.9 - (VARIANT === 'B' ? room * 0.6 * 2 : 0);
+  const H = Math.min(availH, availW / (single ? 1 : 2) / ASPECT), W = H * ASPECT;
+  const cx = w / 2, cy = h / 2;
+  const frame = single
+    ? { ox: cx - W / 2, oy: cy - H / 2, ux: 1, uy: 0, vx: 0, vy: 1, Lu: W, Lv: H }
+    : { ox: cx, oy: cy - H / 2, ux: 1, uy: 0, vx: 0, vy: 1, Lu: W, Lv: H };
+  return { w, h, cx, cy, W, H, single, frame };
+}
+
+function mvpFor(lay) {
+  const D = Math.max(lay.h, lay.frame.Lu * 1.2) * (14 - 12.6 * CURL.depth);
+  const fovy = 2 * Math.atan(lay.h / 2 / D);
+  const f = 1 / Math.tan(fovy / 2), a = lay.w / lay.h, n = D * 0.05, fa = D * 2.5;
+  const P = [f / a, 0, 0, 0, 0, f, 0, 0, 0, 0, (fa + n) / (n - fa), -1, 0, 0, (2 * fa * n) / (n - fa), 0];
+  const V = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -lay.cx, -lay.cy, -D, 1];
+  const M = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += P[k * 4 + r] * V[c * 4 + k];
+    M[c * 4 + r] = s;
+  }
+  return { M, eye: [lay.cx, lay.cy, D] };
+}
+
+// ---------- the Curl shape (corner peel, from #8), extended to Bundle sheets ----------
+// s: progress in the sheet's own direction (0 = where it started, 1 = landed).
+// sh: { jt: position from the top of the stack where it started, K: sheets, gz: spacing, stiff }
+// The sheets of a Bundle wrap round cylinders sharing one axis, so they stay a neat stack.
+function shapeSheet(s, style, order, nItems, lay, sh) {
+  const F = lay.frame, Lu = F.Lu, Lv = F.Lv;
+  const p = easeIO(s);
+  const mir = style === 'fwd' ? 1 : -1;
+  const EPS = 0.35;
+  let k = 0;
+  const put = (X, Y, Z, w) => {
+    X = X * mir;
+    const bias = EPS * (nItems + 2 + order * (2 * w - 1) * mir);
+    pos[k++] = F.ox + F.ux * X + F.vx * Y;
+    pos[k++] = F.oy + F.uy * X + F.vy * Y;
+    pos[k++] = Z + bias;
+  };
+  const beta = (CURL.lead * (1 - sh.stiff) * Math.PI / 180) * Math.pow(1 - p, 1.5);
+  const nx = Math.cos(beta), ny = -Math.sin(beta);
+  const R = CURL.radius * (1 + 1.6 * sh.stiff) * Math.min(lay.W, lay.H) * (1 - smooth(0.6, 1, p)) + 0.01;
+  const g = sh.gz * smooth(0, 0.08, p) * (1 - smooth(0.85, 1, p));
+  const Rj = R + sh.jt * g, base = (sh.K - 1 - sh.jt) * g;
+  const D = (1 - p) * Lu * nx;
+  const half = Math.PI * Rj;
+  for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+    const X0 = (i / NU) * Lu, Y0 = (j / NV) * Lv;
+    const d = X0 * nx + Y0 * ny - D;
+    if (d <= 0) { put(X0, Y0, base, 0); continue; }
+    if (d < half) {
+      const a = d / Rj, off = Rj * Math.sin(a) - d;
+      put(X0 + nx * off, Y0 + ny * off, base + Rj * (1 - Math.cos(a)), d / half);
+      continue;
+    }
+    const off = -(2 * d - half);
+    put(X0 + nx * off, Y0 + ny * off, base + 2 * Rj, 1);
+  }
+}
+
+const FRONT = 1, BACK = 2;
+const NO_SHEET = { jt: 0, K: 1, gz: 0, stiff: 0 };
+function uploadShape(it, lay, nItems) {
+  shapeSheet(it.s, it.style, it.order, nItems, lay, it.sh);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+}
+function drawSheet(it, lay, nItems, faces) {
+  uploadShape(it, lay, nItems);
+  const u = pageProg.u;
+  const t = it.style === 'fwd' ? it.s : 1 - it.s;
+  gl.uniform1f(u.uAlpha, lay.single ? 1 - smooth(0.55, 1, t) : 1); // Single Page: fades away (#8)
+  gl.uniform1f(u.uEdge, it.edge ? 1 : 0);
+  gl.uniform1f(u.uTint, it.tint || 1);
+  if (faces & FRONT) {
+    gl.cullFace(gl.BACK);
+    gl.bindTexture(gl.TEXTURE_2D, pageTex(it.front));
+    gl.uniform3fv(u.uMapX, MAPS.front[0]); gl.uniform3fv(u.uMapY, MAPS.front[1]);
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+  }
+  if (faces & BACK) {
+    gl.cullFace(gl.FRONT);
+    gl.bindTexture(gl.TEXTURE_2D, pageTex(it.back));
+    gl.uniform3fv(u.uMapX, MAPS.back[0]); gl.uniform3fv(u.uMapY, MAPS.back[1]);
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+  }
+}
+function drawShadow(it, lay, nItems, mvp, strength) {
+  uploadShape(it, lay, nItems);
+  const u = shadowProg.u;
+  gl.uniformMatrix4fv(u.uMVP, false, mvp.M);
+  gl.uniform1f(u.uLu, lay.frame.Lu);
+  gl.uniform1f(u.uS, CURL.shadow * 0.16 * strength);
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2;
+    gl.uniform2f(u.uOff, Math.cos(a), Math.sin(a));
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+  }
+}
+
+// Turn the flights into sheets to draw. A Bundle shows the real old page on its first sheet's
+// front and the real new page on its last sheet's back; the sheets between are blank paper,
+// because SumatraPDF only has pictures of the old and the new screen (#5).
+function sheetsOf(st) {
+  const items = [];
+  for (const f of st.flights) {
+    // Each sheet starts a little later than the one above it: a tight stack at Fan out 0%.
+    const geo = flightGeom(f), { n, K, T } = geo;
+    const gz = K > 1 ? T / (K - 1) : 0;
+    const s = f.style === 'fwd' ? f.t : 1 - f.t;
+    const stiff = n > 1 ? opts.stiff * Math.min(1, T / 6) : 0;
+    for (let j = 0; j < K; j++) {
+      const jt = f.style === 'fwd' ? j : K - 1 - j;
+      const sj = sheetProgress(s, jt, geo);
+      items.push({
+        key: K > 1 ? f.lo + (n - 1) * j / (K - 1) : f.lo,
+        s: sj, style: f.style, moving: true, edge: K > 1,
+        tint: K > 1 && j % 2 ? 0.975 : 1,
+        front: j === 0 ? leafPages(f.lo).front : 0,
+        back: j === K - 1 ? leafPages(f.hi - 1).back : 0,
+        sh: { jt, K, gz, stiff },
+        shadow: jt === 0 || jt === K - 1,
+      });
+    }
+  }
+  // Leaves resting between flights: draw only the top one of each group.
+  const lo = Math.min(st.L, ...st.flights.map(f => f.lo)), hi = Math.max(st.L, ...st.flights.map(f => f.hi));
+  const cover = st.flights.map(f => [f.lo, f.hi]).sort((a, b) => a[0] - b[0]);
+  let a = lo;
+  const gaps = [];
+  for (const [cl, ch] of cover) { if (cl > a) gaps.push([a, cl]); a = Math.max(a, ch); }
+  if (hi > a) gaps.push([a, hi]);
+  for (const [ga, gb] of gaps) {
+    const mid = Math.max(ga, Math.min(gb, st.L));
+    const add = (i, onLeft) => leafExists(i) && items.push({ key: i, s: onLeft ? 1 : 0, style: 'fwd', moving: false, front: leafPages(i).front, back: leafPages(i).back, sh: NO_SHEET });
+    if (mid > ga && !opts.view.startsWith('single')) add(mid - 1, true);
+    if (gb > mid) add(mid, false);
+  }
+  items.sort((x, y) => x.key - y.key);
+  items.forEach((it, r) => (it.order = r));
+  return { items, lo, hi };
+}
+
+// ---------- Page Edges (drawn flat, under the pages) ----------
+const under = $('#under');
+const g2 = under.getContext('2d');
+
+function drawEdges(lay, st) {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.round(under.clientWidth * dpr), ch = Math.round(under.clientHeight * dpr);
+  if (under.width !== cw || under.height !== ch) { under.width = cw; under.height = ch; }
+  const c = g2;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.fillStyle = '#8c8c8c';
+  c.fillRect(0, 0, lay.w, lay.h);
+
+  const book = bookThickness();
+  const el = edgeLeaves(st), n = leafCount();
+  let TL = (book * el.left) / n, TR = (book * el.right) / n;
+  if (lay.single) TL = 0; // decided: Single Page shows only the unread pages
+  const top = lay.cy - lay.H / 2;
+  // Outer edges of the visible paper on each side.
+  const leftX = lay.single ? lay.cx - lay.W / 2 : lay.cx - lay.W;
+  const rightX = lay.single ? lay.cx + lay.W / 2 : lay.cx + lay.W;
+  const pageL = lay.single ? leftX : lay.cx - lay.W; // rect of the left page
+
+  // A soft shadow under the paper. A side with no paper stays empty desk,
+  // so the cover lands on a blank slate; it fades in as the first sheet lands.
+  const drop = VARIANT === 'B' ? Math.max(TL, TR) * 0.6 : 0;
+  const underlay = (x0, x1, alpha) => {
+    if (alpha <= 0) return;
+    c.save();
+    c.globalAlpha = Math.min(1, alpha);
+    c.shadowColor = 'rgba(0,0,0,0.35)';
+    c.shadowBlur = 16; c.shadowOffsetX = 3; c.shadowOffsetY = 5;
+    c.fillStyle = '#e9e4d8';
+    c.fillRect(x0, top, x1 - x0, lay.H + drop);
+    c.restore();
+  };
+  if (lay.single) underlay(leftX, rightX + TR, 1);
+  else {
+    underlay(leftX - TL, lay.cx, opts.view === 'facing' ? 1 : el.left); // Facing: page 1 always lies on the left
+    underlay(lay.cx, rightX + TR, el.right);
+  }
+
+  if (VARIANT === 'A') { lines(leftX, -1, TL); lines(rightX, 1, TR); }
+  else if (VARIANT === 'B') { stair(pageL, -1, TL); stair(lay.single ? leftX : lay.cx, 1, TR); }
+  else { soft(leftX, -1, TL); soft(rightX, 1, TR); }
+  lastEdges = { TL, TR, book, left: el.left, right: el.right, gLeft: el.gLeft, gRight: el.gRight };
+
+  // A: fine lines beside the page, full height.
+  function lines(x, dir, T) {
+    if (T < 0.3) return;
+    const x0 = dir > 0 ? x : x - T;
+    const gr = c.createLinearGradient(x, 0, x + dir * T, 0);
+    gr.addColorStop(0, '#f1ece0'); gr.addColorStop(1, '#d6cfbd');
+    c.fillStyle = gr;
+    c.fillRect(x0, top, T, lay.H);
+    c.strokeStyle = 'rgba(110,100,80,0.28)';
+    c.lineWidth = 1 / dpr;
+    for (let d = 1.6; d < T - 0.5; d += 1.6) {
+      const xx = Math.round((x + dir * d) * dpr) / dpr + 0.5 / dpr;
+      c.beginPath(); c.moveTo(xx, top + 0.5); c.lineTo(xx, top + lay.H - 0.5); c.stroke();
+    }
+    c.strokeStyle = 'rgba(80,70,55,0.55)';
+    c.beginPath(); c.moveTo(x + dir * T, top); c.lineTo(x + dir * T, top + lay.H); c.stroke();
+  }
+  // B: copies of the page rectangle, each shifted out and down a little more.
+  function stair(px0, dir, T) {
+    if (T < 0.3) return;
+    const steps = Math.max(1, Math.min(24, Math.round(T / 2)));
+    const st = T / steps;
+    for (let k = steps; k >= 1; k--) {
+      const ox = dir * k * st, oy = k * st * 0.6;
+      const shade = 236 - Math.round((k / steps) * 22);
+      c.fillStyle = `rgb(${shade + 6},${shade + 2},${shade - 8})`;
+      c.fillRect(px0 + ox, top + oy, lay.W, lay.H);
+      c.strokeStyle = 'rgba(90,80,60,0.35)';
+      c.lineWidth = 1 / dpr;
+      c.strokeRect(px0 + ox, top + oy, lay.W, lay.H);
+    }
+  }
+  // C: one rounded, shaded band.
+  function soft(x, dir, T) {
+    if (T < 0.3) return;
+    const r = Math.min(T, 9), bulge = T * 0.18;
+    c.save();
+    c.shadowColor = 'rgba(0,0,0,0.25)'; c.shadowBlur = 6; c.shadowOffsetX = dir * 1.5; c.shadowOffsetY = 1.5;
+    const gr = c.createLinearGradient(x, 0, x + dir * (T + bulge), 0);
+    gr.addColorStop(0, '#f3eee3'); gr.addColorStop(0.6, '#e4ddcc'); gr.addColorStop(1, '#c9c1ad');
+    c.fillStyle = gr;
+    const xo = x + dir * T;
+    c.beginPath();
+    c.moveTo(x - dir * 2, top + 1);
+    c.lineTo(xo - dir * r, top + 1);
+    c.quadraticCurveTo(xo, top + 1, xo, top + 1 + r);
+    c.quadraticCurveTo(xo + dir * bulge, top + lay.H / 2, xo, top + lay.H - 1 - r);
+    c.quadraticCurveTo(xo, top + lay.H - 1, xo - dir * r, top + lay.H - 1);
+    c.lineTo(x - dir * 2, top + lay.H - 1);
+    c.closePath();
+    c.fill();
+    c.restore();
+  }
+}
+let lastEdges = { TL: 0, TR: 0, book: 0, left: 0, right: 0 };
+
+// ---------- one frame ----------
+let lastLay = null;
+function viewState() {
+  if (!$('#hold').checked) return { L, flights };
+  // Frozen study Bundle: a forward jump of N pages from the current Spread, stopped at t.
+  const nL = Math.max(1, Math.round(+$('#holdPages').value / pagesPerLeaf()));
+  const lo = Math.min(L, Math.max(0, maxL() - nL)), hi = Math.min(maxL(), lo + nL);
+  return { L: hi, flights: [{ lo, hi, t: parseFloat($('#holdT').value), target: 1, style: 'fwd', born: 0 }] };
+}
+
+function render() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.round(canvas.clientWidth * dpr), ch = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+  const lay = layout(), mvp = mvpFor(lay);
+  lastLay = lay;
+  const st = viewState();
+
+  drawEdges(lay, st);
+
+  gl.viewport(0, 0, cw, ch);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.bindVertexArray(vao);
+  gl.enable(gl.CULL_FACE);
+  gl.enable(gl.BLEND);
+  gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.disable(gl.DEPTH_TEST);
+
+  const { items, lo, hi } = sheetsOf(st);
+  const nItems = items.length;
+
+  // 1. Pages lying flat underneath.
+  gl.useProgram(pageProg.p);
+  const u = pageProg.u;
+  gl.uniformMatrix4fv(u.uMVP, false, mvp.M);
+  gl.uniform3fv(u.uEye, mvp.eye);
+  gl.uniform1f(u.uShade, CURL.shading);
+  // The spine shadow needs paper on both sides: none beside a lone cover or last page.
+  // Facing always has page 1 on the left.
+  const paper = x => Math.min(1, Math.max(0, x));
+  const gutterLeft = opts.view === 'facing' ? 1 : paper(lastEdges.gLeft);
+  gl.uniform1f(u.uGutter, lay.single ? 0 : gutterLeft * paper(lastEdges.gRight));
+  gl.uniform1f(u.uLu, lay.frame.Lu);
+  gl.uniform1i(u.uTex, 0);
+  gl.activeTexture(gl.TEXTURE0);
+  const flat = (i, onLeft) => ({ s: onLeft ? 1 : 0, style: 'fwd', order: 0, front: leafPages(i).front, back: leafPages(i).back, sh: NO_SHEET });
+  if (!lay.single && leafExists(lo - 1)) drawSheet(flat(lo - 1, true), lay, 0, BACK);
+  else if (!lay.single && lo === 0 && opts.view === 'facing') drawFirstFacingPage(lay);
+  if (leafExists(hi)) drawSheet(flat(hi, false), lay, 0, FRONT);
+
+  // 2. Shadows of lifted sheets, on the paper and the Page Edges only.
+  gl.useProgram(shadowProg.p);
+  const leftPaper = lay.single || opts.view === 'facing' || lastEdges.left > 0;
+  const x0 = lay.single ? lay.cx - lay.W / 2 : leftPaper ? lay.cx - lay.W - lastEdges.TL : lay.cx;
+  const x1 = (lay.single ? lay.cx + lay.W / 2 : lay.cx + lay.W) + lastEdges.TR;
+  gl.enable(gl.SCISSOR_TEST);
+  gl.scissor(Math.round(x0 * dpr), Math.round((lay.cy - lay.H / 2) * dpr), Math.round((x1 - x0) * dpr), Math.round(lay.H * dpr));
+  for (const it of items) if (it.moving && it.shadow) drawShadow(it, lay, nItems, mvp, it.sh.K > 1 ? 1.3 : 1);
+  gl.disable(gl.SCISSOR_TEST);
+
+  // 3. The sheets themselves.
+  gl.useProgram(pageProg.p);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  for (const it of items) drawSheet(it, lay, nItems, FRONT | BACK);
+}
+
+// Facing view, first Spread: page 1 lies alone on the left (not part of a leaf).
+function drawFirstFacingPage(lay) {
+  const F = lay.frame;
+  let k = 0;
+  for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+    const X = -(i / NU) * F.Lu, Y = (j / NV) * F.Lv;
+    pos[k++] = F.ox + F.ux * X + F.vx * Y; pos[k++] = F.oy + F.uy * X + F.vy * Y; pos[k++] = 0;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+  const u = pageProg.u;
+  gl.uniform1f(u.uAlpha, 1); gl.uniform1f(u.uEdge, 0); gl.uniform1f(u.uTint, 1);
+  gl.cullFace(gl.FRONT);
+  gl.bindTexture(gl.TEXTURE_2D, pageTex(1));
+  gl.uniform3fv(u.uMapX, MAPS.back[0]); gl.uniform3fv(u.uMapY, MAPS.back[1]);
+  gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+}
+
+// ---------- readout ----------
+function stateText() {
+  const viewName = { single: 'Single Page', facing: 'Facing', book: 'Book View' }[opts.view];
+  const ppl = pagesPerLeaf(), e = lastEdges;
+  const rows = [`Showing:  ${spreadText()} of ${PAGES}  (${viewName})`];
+  rows.push(`Whole book: ${e.book.toFixed(1)} px thick`);
+  rows.push(`Page Edges: left ${String(Math.round(e.left * ppl)).padStart(4)} pages = ${e.TL.toFixed(1)} px`);
+  rows.push(`            right ${String(Math.round(e.right * ppl)).padStart(4)} pages = ${e.TR.toFixed(1)} px`);
+  const st = viewState();
+  rows.push(`In the air: ${st.flights.length} (most: ${CURL.maxAir})`);
+  for (const f of st.flights) {
+    const n = f.hi - f.lo;
+    const done = f.target === 1 ? f.t : 1 - f.t;
+    const bar = '█'.repeat(Math.round(done * 10)) + '░'.repeat(10 - Math.round(done * 10));
+    const what = n === 1 ? 'Curl  ' : `Bundle ${n * ppl} pages, ${bundleThickness(n).toFixed(1)} px, ${sheetsFor(n)} sheets drawn`;
+    rows.push(`  ${f.target === 1 ? '→' : '←'} ${bar} ${what}`);
+  }
+  rows.push(`Curl duration now: ${Math.round(tempo)} ms (normal ${CURL.dur})`);
+  return rows.join('\n');
+}
+
+function choicesText() {
+  const v = VARIANTS.find(v => v.key === VARIANT);
+  const segLabel = key => SEGS.find(s => s[1] === key)[3].split('|').find(o => o.startsWith(opts[key] + ':')).split(':')[1];
+  const fmtOf = key => SLIDERS.find(s => s[1] === key);
+  const sl = key => { const s = fmtOf(key); return `${s[2]}: ${s[7](opts[key])}`; };
+  return [
+    'Bundles and Page Edges prototype choices',
+    `Page Edges style: ${v.key} (${v.name})`,
+    `Tested in: ${segLabel('view')}, ${PAGES}-page book`,
+    'Page Edges: ' + sl('edgePer'), 'Page Edges: ' + sl('edgeMax'), 'Page Edges: ' + sl('edgeMin'),
+    `Short versus long books: ${segLabel('model')}`,
+    `Page Edges change: ${segLabel('timing')}`,
+    'Single Page view shows: unread Page Edges only',
+    'Bundle: ' + sl('bunPer'), 'Bundle: ' + sl('bunMax'), 'Bundle: ' + sl('fan'), 'Bundle: ' + sl('stiff'), 'Bundle: ' + sl('bunDur'),
+  ].join('\n');
+}
+
+// ---------- input ----------
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' && e.target.type === 'number') return;
+  if (e.key === '[' || e.key === ']') { cycleVariant(e.key === ']' ? 1 : -1); e.preventDefault(); return; }
+  const fwd = ['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key) && !(e.key === ' ' && e.shiftKey);
+  const back = ['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key) || (e.key === ' ' && e.shiftKey);
+  let did = true;
+  if (e.key === 'Home') turnTo(0);
+  else if (e.key === 'End') turnTo(maxL());
+  else if ((fwd || back) && e.shiftKey && e.key !== ' ') jumpPages(fwd ? 10 : -10);
+  else if (fwd) step(1);
+  else if (back) step(-1);
+  else did = false;
+  if (!did) return;
+  e.preventDefault();
+  if (e.target instanceof HTMLElement && e.target !== document.body) e.target.blur();
+});
+canvas.addEventListener('mousedown', e => {
+  const r = canvas.getBoundingClientRect();
+  step(e.clientX - r.left < r.width / 2 ? -1 : 1);
+});
+let wheelAcc = 0;
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  wheelAcc += e.deltaY;
+  while (Math.abs(wheelAcc) >= 100) { step(Math.sign(wheelAcc)); wheelAcc -= Math.sign(wheelAcc) * 100; }
+}, { passive: false });
+document.querySelectorAll('.jumps button').forEach(b => b.onclick = () => {
+  const j = b.dataset.j;
+  if (j === 'start') turnTo(0); else if (j === 'end') turnTo(maxL()); else jumpPages(+j);
+  b.blur();
+});
+$('#gotoB').onclick = () => { const n = parseInt($('#gotoN').value, 10); if (n >= 1) turnTo(leavesFor(Math.min(PAGES, n))); $('#gotoB').blur(); };
+$('#gotoN').addEventListener('keydown', e => { if (e.key === 'Enter') $('#gotoB').click(); });
+$('#prev').onclick = () => cycleVariant(-1);
+$('#next').onclick = () => cycleVariant(1);
+$('#holdPages').addEventListener('input', () => ($('#holdPagesV').textContent = $('#holdPages').value + ' pages'));
+['holdT', 'holdPages'].forEach(id => $('#' + id).addEventListener('change', e => e.target.blur()));
+$('#copy').onclick = async () => {
+  const text = choicesText();
+  const out = $('#copyOut');
+  out.value = text;
+  out.style.display = 'block';
+  try { await navigator.clipboard.writeText(text); $('#copy').textContent = 'Copied! Paste it into the chat'; }
+  catch (err) { out.select(); $('#copy').textContent = 'Select the text below and press Ctrl+C'; }
+};
+
+// ---------- go ----------
+buildControls();
+refreshVariant();
+lastLay = layout();
+setPage(parseInt(params.get('page') || '120', 10)); // opening a document shows no turn
+if (params.has('hold')) { $('#hold').checked = true; $('#holdT').value = params.get('hold'); }
+if (params.has('holdPages')) $('#holdPages').value = params.get('holdPages');
+$('#holdPagesV').textContent = $('#holdPages').value + ' pages';
+
+let prev = performance.now(), lastReadout = 0;
+function frame(now) {
+  update(Math.min(100, now - prev));
+  prev = now;
+  render();
+  if (now - lastReadout > 80) { $('#state').textContent = stateText(); lastReadout = now; }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
