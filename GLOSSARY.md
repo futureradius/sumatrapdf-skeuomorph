@@ -27,7 +27,7 @@ Moving from one Spread to another in a Paged View, whether to the next one or a 
 _Avoid_: page flip, scroll, page change
 
 **Curl**:
-The realistic paper animation shown during a Page Turn: the page bends over, showing a shadow and its back. Several Curls can be in progress at once, each at its own stage.
+The realistic paper animation shown during a Page Turn: the page bends over, showing a shadow and its back. Several Curls can be in progress at once, each at its own stage. A Curl **lands** when its page lies flat on the other side; landing instantly means skipping straight to that end. Bundles land the same way.
 _Avoid_: flip animation, slide
 
 **Bundle**:
