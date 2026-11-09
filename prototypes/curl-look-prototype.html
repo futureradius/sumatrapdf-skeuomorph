@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE - Curl look and feel</title>
+<!--
+  PROTOTYPE, throwaway. Answers the ticket "What should a Curl look and feel like?"
+  (futureradius/sumatrapdf-skeuomorph#8).
+  Three Curl styles on one page, switched with ?variant=A|B|C or the bottom bar.
+  Open by double-clicking (Edge). Nothing is saved; reload resets everything.
+  Drawn with WebGL: the browser's cousin of the Direct3D 11 approach the map chose
+  (a page bent around a cylinder, over a fake document).
+-->
+<style>
+:root { --desk:#8c8c8c; --panel:#f4f4f2; --ink:#222; --muted:#666; --accent:#2b5fd9; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; font:13px/1.4 "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--desk); overflow:hidden; }
+#app { display:flex; height:100%; }
+#stage { flex:1; position:relative; min-width:0; }
+#gl { position:absolute; inset:0; width:100%; height:100%; display:block; cursor:pointer; }
+#tag { position:absolute; top:8px; left:8px; background:#ffd84d; color:#000; padding:3px 8px; border-radius:4px; font-weight:600; font-size:12px; pointer-events:none; }
+#panel { width:340px; flex:none; background:var(--panel); overflow-y:auto; padding:12px 14px 90px; border-left:1px solid #bbb; }
+#panel h1 { font-size:15px; margin:0 0 4px; }
+h2 { font-size:12px; margin:18px 0 6px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); border-bottom:1px solid #ddd; padding-bottom:3px; }
+.row { margin:6px 0 12px; }
+.row label { display:flex; justify-content:space-between; gap:8px; }
+.row .val { font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600; white-space:nowrap; }
+.row input[type=range] { width:100%; margin:3px 0 0; }
+.hint { color:var(--muted); font-size:12px; margin-top:1px; }
+.seg { display:flex; margin-top:3px; }
+.seg button { flex:1; border:1px solid #aaa; background:#fff; padding:4px 2px; font:inherit; font-size:12px; cursor:pointer; }
+.seg button + button { border-left:none; }
+.seg button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.check { display:flex; gap:6px; align-items:center; margin:6px 0; }
+#state { background:#fff; border:1px solid #ccc; border-radius:4px; padding:8px; font:12px/1.55 Consolas, monospace; white-space:pre; min-height:120px; overflow-x:auto; }
+#desc { background:#fff; border-left:3px solid var(--accent); padding:6px 8px; margin:8px 0; }
+#todo { margin:6px 0 0; padding-left:18px; }
+#todo li { margin:2px 0; }
+button.big { width:100%; padding:7px; font:inherit; font-weight:600; cursor:pointer; margin-top:4px; }
+#copyOut { width:100%; height:170px; font:12px Consolas, monospace; display:none; margin-top:6px; }
+#switcher { position:fixed; bottom:16px; left:calc((100% - 340px) / 2); transform:translateX(-50%); display:flex; align-items:center; gap:10px; background:#111; color:#fff; padding:6px 10px; border-radius:999px; box-shadow:0 4px 14px rgba(0,0,0,.45); user-select:none; z-index:10; }
+#switcher button { background:#333; color:#fff; border:none; width:30px; height:30px; border-radius:50%; font-size:15px; cursor:pointer; }
+#switcher .lbl { min-width:180px; text-align:center; font-weight:600; line-height:1.2; }
+#switcher .k { opacity:.6; font-size:11px; font-weight:400; display:block; }
+.only-single.off, .only-var.off { display:none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="gl"></canvas>
+    <div id="tag">PROTOTYPE, throwaway</div>
+  </div>
+  <aside id="panel">
+    <h1>What should a Curl look and feel like?</h1>
+    <div class="hint">Turn pages: <b>→</b> / <b>PageDown</b> / <b>Space</b> or click the right half. Back: <b>←</b> / <b>PageUp</b> or click the left half. Hold a key to turn fast. <b>[</b> and <b>]</b> switch the Curl style.</div>
+    <div id="desc"></div>
+    <div class="hint">To decide:</div>
+    <ol id="todo" class="hint">
+      <li>Which Curl style (bottom bar), and how it should look (Look).</li>
+      <li>The normal Curl speed (becomes the setting's default).</li>
+      <li>How much fast tapping and holding a key speed it up.</li>
+      <li>How many pages can be in the air at once.</li>
+      <li>Single Page: where the turned page goes, and what its back shows.</li>
+    </ol>
+
+    <h2>View</h2>
+    <div id="sec-view"></div>
+
+    <h2>Look</h2>
+    <div id="sec-look"></div>
+
+    <h2>Speed</h2>
+    <div id="sec-speed"></div>
+
+    <h2>Single Page only</h2>
+    <div id="sec-single"></div>
+
+    <h2>Study one Curl</h2>
+    <label class="check"><input type="checkbox" id="slowmo"> Slow motion (5× slower)</label>
+    <label class="check"><input type="checkbox" id="hold"> Freeze a Curl at this point:</label>
+    <div class="row"><input type="range" id="holdT" min="0" max="1" step="0.01" value="0.4"></div>
+
+    <h2>What's happening</h2>
+    <div id="state"></div>
+
+    <h2>Done?</h2>
+    <button class="big" id="copy">Copy my choices</button>
+    <div class="hint">Paste the copied text back into the chat.</div>
+    <textarea id="copyOut" readonly></textarea>
+  </aside>
+</div>
+<div id="switcher">
+  <button id="prev" title="Previous style ( [ )">◀</button>
+  <div class="lbl"><span id="vlabel"></span><span class="k">Curl style · [ and ] keys</span></div>
+  <button id="next" title="Next style ( ] )">▶</button>
+</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+
+// ---------- fake document ----------
+const PAGES = 120;
+const ASPECT = 600 / 776; // US Letter width / height
+const PAPER_RGB = [251 / 255, 248 / 255, 241 / 255];
+
+// ---------- the three Curl styles ----------
+const VARIANTS = [
+  { key: 'A', name: 'Corner peel', desc: '<b>A · Corner peel.</b> The bottom corner lifts first and the bend sweeps across at a slant, then straightens out. Like turning a page by its corner.' },
+  { key: 'B', name: 'Straight roll', desc: '<b>B · Straight roll.</b> An upright bend rolls across the page from the edge to the spine. Like sliding a page over with a flat hand.' },
+  { key: 'C', name: 'Stiff leaf', desc: '<b>C · Stiff leaf.</b> The whole page lifts and swings over the spine, sagging a little behind as it goes. Like a page in a thick book.' },
+];
+
+// ---------- controls ----------
+// [section, key, label, min, max, step, default, format, hint, onlyForVariants]
+const pct = v => Math.round(v * 100) + '%';
+const SLIDERS = [
+  ['look', 'radius', 'Bend size', 0.04, 0.4, 0.01, 0.14, v => Math.round(v * 100) + '% of page', 'Small = tight fold, large = soft roll.', ['A', 'B']],
+  ['look', 'lead', 'Corner lead', 0, 60, 1, 30, v => v + '°', 'How far the bottom corner runs ahead of the bend.', ['A']],
+  ['look', 'bend', 'Sag while swinging', 0, 1, 0.05, 0.45, pct, 'How much the page bends behind as it swings over.', ['C']],
+  ['look', 'shadow', 'Shadow', 0, 1, 0.05, 0.5, pct, 'Shadow the lifted page casts on the page below.'],
+  ['look', 'shading', 'Light and shade on the bend', 0, 1, 0.05, 0.65, pct, ''],
+  ['look', 'depth', '3D depth', 0, 1, 0.05, 0.35, pct, 'How much a lifted page grows toward you.'],
+  ['speed', 'dur', 'Normal Curl duration', 150, 1500, 10, 550, v => v + ' ms', 'One Curl at a normal pace. Becomes the speed setting\'s default.'],
+  ['speed', 'overlap', 'Pages in the air when tapping fast', 1, 6, 0.5, 2.5, v => String(v), 'Tap faster than one Curl lasts and each Curl shortens, so about this many are in the air.'],
+  ['speed', 'fastest', 'Fastest Curl', 40, 500, 10, 140, v => v + ' ms', 'Never quicker than this, even when holding a key.'],
+  ['speed', 'maxAir', 'Most pages in the air at once', 1, 12, 1, 5, v => String(v), 'Past this, the oldest Curl lands at once.'],
+];
+// [section, key, label, options "value:Label|...", default]
+const SEGS = [
+  ['view', 'view', 'Paged View', 'single:Single Page|facing:Facing|book:Book View', 'book'],
+  ['single', 'hinge', 'The page bends around its', 'left:Left edge (book)|top:Top edge (notepad)', 'left'],
+  ['single', 'after', 'After turning, the old page', 'stays:Stays beside|fades:Fades away|away:Slides away', 'fades'],
+  ['single', 'back', 'Back of the turning page', 'next:Next page|blank:Blank paper|mirror:Show-through', 'blank'],
+];
+
+const params = new URLSearchParams(location.search);
+const opts = {};
+let VARIANT = (params.get('variant') || 'A').toUpperCase();
+if (!VARIANTS.some(v => v.key === VARIANT)) VARIANT = 'A';
+
+function buildControls() {
+  for (const [sec, key, label, min, max, step, def, fmt, hint, only] of SLIDERS) {
+    opts[key] = def;
+    const row = document.createElement('div');
+    row.className = 'row' + (only ? ' only-var' : '');
+    if (only) row.dataset.only = only.join('');
+    row.innerHTML = `<label><span>${label}</span><span class="val"></span></label>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${def}">
+      ${hint ? `<div class="hint">${hint}</div>` : ''}`;
+    const input = row.querySelector('input'), val = row.querySelector('.val');
+    const show = () => { opts[key] = parseFloat(input.value); val.textContent = fmt(opts[key]); };
+    input.addEventListener('input', show);
+    input.addEventListener('change', () => input.blur()); // keep arrow keys for turning pages
+    show();
+    $('#sec-' + sec).appendChild(row);
+  }
+  for (const [sec, key, label, optStr, def] of SEGS) {
+    opts[key] = params.get(key) || def;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label><span>${label}</span></label><div class="seg"></div>`;
+    const seg = row.querySelector('.seg');
+    for (const o of optStr.split('|')) {
+      const [value, text] = o.split(':');
+      const b = document.createElement('button');
+      b.textContent = text;
+      b.classList.toggle('on', value === opts[key]);
+      b.onclick = () => {
+        const before = currentPage();
+        opts[key] = value;
+        seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+        b.blur();
+        if (key === 'view') setPage(before);
+        leaves.clear();
+        refreshVisibility();
+      };
+      seg.appendChild(b);
+    }
+    $('#sec-' + sec).appendChild(row);
+  }
+}
+
+function refreshVisibility() {
+  document.querySelectorAll('.only-var').forEach(el => el.classList.toggle('off', !el.dataset.only.includes(VARIANT)));
+  const v = VARIANTS.find(v => v.key === VARIANT);
+  $('#vlabel').textContent = `${v.key} (${v.name})`;
+  $('#desc').innerHTML = v.desc;
+  $('#sec-single').style.opacity = opts.view === 'single' ? 1 : 0.45;
+}
+
+function cycleVariant(d) {
+  const i = VARIANTS.findIndex(v => v.key === VARIANT);
+  VARIANT = VARIANTS[(i + d + VARIANTS.length) % VARIANTS.length].key;
+  try { history.replaceState(null, '', '?variant=' + VARIANT); } catch (e) { location.hash = 'variant=' + VARIANT; }
+  leaves.clear();
+  refreshVisibility();
+}
+
+// ---------- book model ----------
+// A leaf is one physical sheet: front page on the right, back page on the left once turned.
+// L = number of leaves turned. Leaves i < L belong on the left, i >= L on the right.
+// Only leaves in the air are stored: { t: 0 = flat on right .. 1 = flat on left, target, style, born }.
+// style 'fwd' = started from the right, 'back' = started from the left (mirrored Curl).
+let L = 0;
+const leaves = new Map();
+let tempo = 550;        // current Curl duration in ms (shrinks when tapping fast)
+let lastTap = -1e9, lastGap = null;
+
+function leafPages(i) {
+  const pg = x => (x >= 1 && x <= PAGES ? x : 0); // 0 = blank paper
+  if (opts.view === 'single') return { front: i + 1, back: opts.back === 'next' ? pg(i + 2) : 0, mirror: opts.back === 'mirror' };
+  if (opts.view === 'book') return { front: 2 * i + 1, back: pg(2 * i + 2), mirror: false };
+  return { front: 2 * i + 2, back: pg(2 * i + 3), mirror: false };
+}
+const leafExists = i => i >= 0 && leafPages(i).front <= PAGES;
+function maxL() {
+  if (opts.view === 'single') return PAGES - 1;
+  if (opts.view === 'book') return Math.floor(PAGES / 2);
+  return Math.floor((PAGES - 1) / 2);
+}
+function currentPage() {
+  if (opts.view === 'single') return L + 1;
+  if (opts.view === 'book') return L === 0 ? 1 : 2 * L;
+  return 2 * L + 1;
+}
+function setPage(p) {
+  if (opts.view === 'single') L = p - 1;
+  else if (opts.view === 'book') L = Math.floor(p / 2);
+  else L = Math.floor((p - 1) / 2);
+  L = Math.max(0, Math.min(maxL(), L));
+}
+function spreadText() {
+  const ok = p => p >= 1 && p <= PAGES;
+  if (opts.view === 'single') return 'page ' + (L + 1);
+  const left = opts.view === 'book' ? 2 * L : 2 * L + 1, right = left + 1;
+  return [left, right].filter(ok).join('–').replace(/^/, 'pages ');
+}
+
+function turn(dir) {
+  const now = performance.now();
+  const gap = now - lastTap;
+  lastTap = now;
+  lastGap = gap < 3000 ? gap : null;
+
+  // Tapping faster than one Curl lasts: shorten Curls so about `overlap` are in the air.
+  tempo = gap < opts.dur ? Math.min(opts.dur, Math.max(opts.fastest, gap * opts.overlap)) : opts.dur;
+
+  if (dir > 0) {
+    if (L >= maxL()) return;
+    const i = L++;
+    const lf = leaves.get(i) || { t: 0, style: 'fwd', born: now };
+    lf.target = 1;
+    leaves.set(i, lf);
+  } else {
+    if (L <= 0) return;
+    const i = --L;
+    const lf = leaves.get(i) || { t: 1, style: 'back', born: now };
+    lf.target = 0;
+    leaves.set(i, lf);
+  }
+
+  // Too many in the air: the oldest lands at once.
+  while (leaves.size > opts.maxAir) {
+    let oldest = null;
+    for (const [i, lf] of leaves) if (oldest === null || lf.born < leaves.get(oldest).born) oldest = i;
+    leaves.delete(oldest);
+  }
+}
+
+function update(dt) {
+  const now = performance.now();
+  if (now - lastTap > tempo * 1.5) tempo += (opts.dur - tempo) * Math.min(1, dt / 250); // calm down after fast tapping
+
+  const slow = $('#slowmo').checked ? 0.2 : 1;
+  const step = (dt / tempo) * slow;
+  for (const [i, lf] of leaves) {
+    lf.t += lf.target > lf.t ? step : -step;
+    if ((lf.target === 1 && lf.t >= 1) || (lf.target === 0 && lf.t <= 0)) leaves.delete(i);
+  }
+}
+
+// ---------- page pictures ----------
+const WORDS = 'the of and a to in is you that it he was for on are as with his they at be this have from or one had by word but not what all were we when your can said there use an each which she do how their if will up other about out many then them these so some her would make like him into time has look two more write go see number no way could people my than first water been call who oil its now find long down day did get come made may part'.split(' ');
+function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+const PW = 800, PH = Math.round(800 / ASPECT);
+function drawPage(n) {
+  const c = document.createElement('canvas');
+  c.width = PW; c.height = PH;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgb(251,248,241)';
+  g.fillRect(0, 0, PW, PH);
+  if (n === 0) return c; // blank paper
+
+  const r = rng(n * 9973);
+  const M = 72;
+
+  // big faint number, so you can follow a page through the air
+  g.fillStyle = 'rgba(0,0,0,0.055)';
+  g.font = 'bold 360px Georgia';
+  g.textAlign = 'center';
+  g.fillText(String(n), PW / 2, PH / 2 + 125);
+
+  const chapter = Math.floor((n - 1) / 12) + 1;
+  g.fillStyle = '#888';
+  g.font = 'italic 19px Georgia';
+  g.textAlign = n % 2 ? 'right' : 'left';
+  g.fillText('Chapter ' + chapter, n % 2 ? PW - M : M, 56);
+
+  g.textAlign = 'left';
+  let y = 112;
+  if ((n - 1) % 12 === 0) {
+    g.fillStyle = '#222';
+    g.font = 'bold 46px Georgia';
+    g.fillText('Chapter ' + chapter, M, 175);
+    y = 250;
+  }
+
+  const lineH = 32, bottom = PH - 100, width = PW - 2 * M;
+  let figureDone = n % 5 !== 3;
+  g.font = '21px Georgia';
+  while (y < bottom) {
+    if (!figureDone && y > 330) {
+      // a simple figure, so the back and the show-through are easy to read
+      const h = 260;
+      g.strokeStyle = '#555'; g.lineWidth = 2;
+      g.strokeRect(M, y - 20, width, h);
+      g.fillStyle = '#d9e2ef'; g.fillRect(M + 1, y - 19, width - 2, h - 2);
+      g.fillStyle = '#7d93b5';
+      g.beginPath(); g.moveTo(M, y + h - 20); g.lineTo(M + width * 0.35, y + 40); g.lineTo(M + width * 0.55, y + 140); g.lineTo(M + width * 0.75, y + 70); g.lineTo(M + width, y + h - 20); g.fill();
+      g.fillStyle = '#e8b04a'; g.beginPath(); g.arc(M + width * 0.82, y + 30, 26, 0, 7); g.fill();
+      g.fillStyle = '#666'; g.font = 'italic 17px Georgia';
+      g.fillText('Figure ' + n + '. A view from the hill.', M, y + h + 10);
+      g.font = '21px Georgia';
+      y += h + 50;
+      figureDone = true;
+      continue;
+    }
+    const lines = 3 + Math.floor(r() * 6);
+    g.fillStyle = '#2a2a2a';
+    for (let k = 0; k < lines && y < bottom; k++) {
+      const last = k === lines - 1;
+      const indent = k === 0 ? 34 : 0;
+      const maxChars = ((width - indent) / 10.4) * (last ? 0.3 + r() * 0.5 : 1);
+      let s = '';
+      while (s.length < maxChars) s += WORDS[Math.floor(r() * WORDS.length)] + ' ';
+      if (k === 0) s = s[0].toUpperCase() + s.slice(1);
+      g.fillText(s.trim() + (last ? '.' : ''), M + indent, y, last ? undefined : width - indent);
+      y += lineH;
+    }
+    y += 12;
+  }
+
+  g.textAlign = 'center';
+  g.fillStyle = '#555';
+  g.font = '19px Georgia';
+  g.fillText(String(n), PW / 2, PH - 46);
+  return c;
+}
+
+// ---------- WebGL ----------
+const canvas = $('#gl');
+const gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
+if (!gl) document.body.innerHTML = '<p style="padding:20px">This prototype needs WebGL 2, which Edge has. Try updating Edge.</p>';
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.bindAttribLocation(p, 0, 'aPos');
+  gl.bindAttribLocation(p, 1, 'aUV');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name] = gl.getUniformLocation(p, info.name); }
+  return { p, u };
+}
+
+// Paper: picture + light/shade from the surface's tilt + a gutter shadow near the spine.
+const PAGE_VS = `#version 300 es
+in vec3 aPos; in vec2 aUV;
+uniform mat4 uMVP; uniform vec3 uMapX, uMapY;
+out vec2 vTex; out vec3 vPos; out float vU;
+void main() {
+  vPos = aPos; vU = aUV.x;
+  vTex = vec2(dot(uMapX, vec3(aUV, 1.0)), dot(uMapY, vec3(aUV, 1.0)));
+  gl_Position = uMVP * vec4(aPos, 1.0);
+}`;
+const PAGE_FS = `#version 300 es
+precision highp float;
+in vec2 vTex; in vec3 vPos; in float vU;
+uniform sampler2D uTex;
+uniform float uFade, uShade, uAlpha, uGutter, uLu;
+uniform vec3 uEye, uPaper;
+out vec4 o;
+void main() {
+  vec3 c = mix(texture(uTex, vTex).rgb, uPaper, uFade);
+  vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
+  vec3 V = normalize(uEye - vPos);
+  if (dot(n, V) < 0.0) n = -n;
+  vec3 Ld = normalize(vec3(-0.35, 0.45, 1.0));
+  float diff = max(dot(n, Ld), 0.0) / Ld.z;
+  float spec = pow(max(dot(n, normalize(Ld + V)), 0.0), 50.0) * (1.0 - n.z);
+  c *= mix(1.0, 0.2 + 0.8 * diff, uShade);
+  c += uShade * 0.35 * spec;
+  c *= 1.0 - uGutter * 0.22 * exp(-vU * uLu / 22.0);
+  o = vec4(c, uAlpha);
+}`;
+// Shadow: the leaf flattened onto the page below, pushed away from the light by its height.
+const SHADOW_VS = `#version 300 es
+in vec3 aPos;
+uniform mat4 uMVP; uniform vec2 uOff;
+out float vZ;
+void main() {
+  vZ = aPos.z;
+  vec2 xy = aPos.xy + vec2(0.22, -0.28) * aPos.z + uOff * (1.0 + aPos.z * 0.035);
+  gl_Position = uMVP * vec4(xy, 0.0, 1.0);
+}`;
+const SHADOW_FS = `#version 300 es
+precision highp float;
+in float vZ;
+uniform float uS, uLu;
+out vec4 o;
+void main() {
+  float a = uS * smoothstep(1.5, uLu * 0.08, vZ) * (1.0 - 0.65 * smoothstep(0.0, uLu * 0.9, vZ));
+  o = vec4(0.0, 0.0, 0.0, a);
+}`;
+
+const pageProg = program(PAGE_VS, PAGE_FS);
+const shadowProg = program(SHADOW_VS, SHADOW_FS);
+
+// Leaf mesh: a grid. u = 0 at the spine .. 1 at the outer edge, v = along the spine.
+const NU = 64, NV = 40;
+const VCOUNT = (NU + 1) * (NV + 1);
+const pos = new Float32Array(VCOUNT * 3);
+const uvs = new Float32Array(VCOUNT * 2);
+const idx = new Uint16Array(NU * NV * 6);
+for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) { const k = j * (NU + 1) + i; uvs[k * 2] = i / NU; uvs[k * 2 + 1] = j / NV; }
+for (let j = 0, q = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+  const a = j * (NU + 1) + i, b = a + 1, c = a + NU + 1, d = c + 1;
+  idx.set([a, b, c, b, d, c], q); q += 6;
+}
+const vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
+const posBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, pos.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+const uvBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf); gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
+const idxBuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+
+const texCache = new Map();
+function pageTex(n) {
+  if (texCache.has(n)) { const t = texCache.get(n); texCache.delete(n); texCache.set(n, t); return t; }
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, drawPage(n));
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  texCache.set(n, tex);
+  if (texCache.size > 60) { const k = texCache.keys().next().value; gl.deleteTexture(texCache.get(k)); texCache.delete(k); }
+  return tex;
+}
+
+// ---------- layout ----------
+// World units = screen pixels on the page plane (z = 0); z points toward you.
+// A "frame" places a leaf: origin at the spine, uDir away from the spine, vDir along it.
+const MAPS = {
+  left: { front: [[1, 0, 0], [0, 1, 0]], back: [[-1, 0, 1], [0, 1, 0]] },
+  top: { front: [[0, 1, 0], [-1, 0, 1]], back: [[0, 1, 0], [1, 0, 0]] },
+};
+function layout() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const single = opts.view === 'single';
+  const availW = w * 0.9, availH = h * 0.9;
+  const H = Math.min(availH, availW / (single ? 1 : 2) / ASPECT), W = H * ASPECT;
+  const cx = w / 2, cy = h / 2;
+  let frame, maps = MAPS.left;
+  if (!single) frame = { ox: cx, oy: cy - H / 2, ux: 1, uy: 0, vx: 0, vy: 1, Lu: W, Lv: H };
+  else if (opts.hinge === 'left') frame = { ox: cx - W / 2, oy: cy - H / 2, ux: 1, uy: 0, vx: 0, vy: 1, Lu: W, Lv: H };
+  else { frame = { ox: cx - W / 2, oy: cy + H / 2, ux: 0, uy: -1, vx: 1, vy: 0, Lu: H, Lv: W }; maps = MAPS.top; }
+  return { w, h, cx, cy, W, H, single, frame, maps };
+}
+
+function mvpFor(lay) {
+  const D = Math.max(lay.h, lay.frame.Lu * 1.2) * (14 - 12.6 * opts.depth); // camera distance
+  const fovy = 2 * Math.atan(lay.h / 2 / D);
+  const f = 1 / Math.tan(fovy / 2), a = lay.w / lay.h, n = D * 0.05, fa = D * 2.5;
+  const P = [f / a, 0, 0, 0, 0, f, 0, 0, 0, 0, (fa + n) / (n - fa), -1, 0, 0, (2 * fa * n) / (n - fa), 0];
+  const V = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -lay.cx, -lay.cy, -D, 1];
+  const M = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += P[k * 4 + r] * V[c * 4 + k];
+    M[c * 4 + r] = s;
+  }
+  return { M, eye: [lay.cx, lay.cy, D] };
+}
+
+// ---------- the Curl shapes ----------
+const easeIO = t => 0.5 - 0.5 * Math.cos(Math.PI * t);
+const smooth = (a, b, x) => { x = Math.min(1, Math.max(0, (x - a) / (b - a))); return x * x * (3 - 2 * x); };
+
+// Fills `pos` with the leaf bent at progress t (0 flat right .. 1 flat left).
+// order: stacking among leaves in the air, so overlapping paper doesn't flicker.
+function shapeLeaf(t, style, order, lay) {
+  const F = lay.frame, Lu = F.Lu, Lv = F.Lv;
+  const s = style === 'fwd' ? t : 1 - t; // a 'back' Curl is a forward Curl, mirrored
+  const p = easeIO(s);
+  const mir = style === 'fwd' ? 1 : -1;
+  const away = lay.single && opts.after === 'away' ? smooth(0.4, 1, t) * Lu * 2.4 : 0;
+  const EPS = 0.6;
+
+  let k = 0;
+  const put = (X, Y, Z, w) => {
+    X = X * mir - away;
+    const bias = EPS * (20 + order * (2 * w - 1) * mir);
+    pos[k++] = F.ox + F.ux * X + F.vx * Y;
+    pos[k++] = F.oy + F.uy * X + F.vy * Y;
+    pos[k++] = Z + bias;
+  };
+
+  if (VARIANT === 'C') {
+    // Stiff leaf: swings round the spine; the outer part lags (curvature kk).
+    const th = Math.PI * p;
+    const kk = -Math.min(opts.bend * 1.3 * Math.sin(Math.PI * p), th * 0.95) / Lu;
+    const sT = Math.sin(th), cT = Math.cos(th);
+    for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+      const S = (i / NU) * Lu;
+      let X, Z;
+      if (Math.abs(kk) < 1e-9) { X = S * cT; Z = S * sT; }
+      else { X = (Math.sin(th + kk * S) - sT) / kk; Z = (cT - Math.cos(th + kk * S)) / kk; }
+      put(X, (j / NV) * Lv, Z, p);
+    }
+    return;
+  }
+
+  // Corner peel / straight roll: the page wraps over a cylinder lying on it.
+  // The fold line starts at the outer edge (slanted for A) and moves to the spine;
+  // the cylinder shrinks at the end so the page lands flat.
+  const beta = VARIANT === 'A' ? (opts.lead * Math.PI / 180) * Math.pow(1 - p, 1.5) : 0;
+  const nx = Math.cos(beta), ny = -Math.sin(beta); // fold normal, toward the lifting corner
+  const R = opts.radius * Math.min(lay.W, lay.H) * (1 - smooth(0.6, 1, p)) + 0.01;
+  const D = (1 - p) * Lu * nx;
+  const half = Math.PI * R;
+  for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+    const X0 = (i / NU) * Lu, Y0 = (j / NV) * Lv;
+    const d = X0 * nx + Y0 * ny - D; // distance past the fold line
+    if (d <= 0) { put(X0, Y0, 0, 0); continue; }
+    if (d < half) {
+      const a = d / R, off = R * Math.sin(a) - d;
+      put(X0 + nx * off, Y0 + ny * off, R * (1 - Math.cos(a)), d / half);
+      continue;
+    }
+    const off = -(2 * d - half);
+    put(X0 + nx * off, Y0 + ny * off, 2 * R, 1);
+  }
+}
+
+// ---------- drawing ----------
+const FRONT = 1, BACK = 2;
+function drawLeaf(i, t, style, order, lay, faces, alpha) {
+  shapeLeaf(t, style, order, lay);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+  const pg = leafPages(i), u = pageProg.u;
+  gl.uniform1f(u.uAlpha, alpha);
+
+  if (faces & FRONT) {
+    gl.cullFace(gl.BACK);
+    gl.bindTexture(gl.TEXTURE_2D, pageTex(pg.front));
+    gl.uniform3fv(u.uMapX, lay.maps.front[0]); gl.uniform3fv(u.uMapY, lay.maps.front[1]);
+    gl.uniform1f(u.uFade, 0);
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+  }
+  if (faces & BACK) {
+    gl.cullFace(gl.FRONT);
+    const m = pg.mirror ? lay.maps.front : lay.maps.back; // show-through: the front seen from behind
+    gl.bindTexture(gl.TEXTURE_2D, pageTex(pg.mirror ? pg.front : pg.back));
+    gl.uniform3fv(u.uMapX, m[0]); gl.uniform3fv(u.uMapY, m[1]);
+    gl.uniform1f(u.uFade, pg.mirror ? 0.78 : 0);
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+  }
+}
+
+function drawShadow(t, style, order, lay, mvp) {
+  shapeLeaf(t, style, order, lay);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+  const u = shadowProg.u;
+  gl.uniformMatrix4fv(u.uMVP, false, mvp.M);
+  gl.uniform1f(u.uLu, lay.frame.Lu);
+  gl.uniform1f(u.uS, opts.shadow * 0.16);
+  for (let k = 0; k < 8; k++) { // 8 copies in a ring = soft edge, softer the higher the paper
+    const a = (k / 8) * Math.PI * 2;
+    gl.uniform2f(u.uOff, Math.cos(a), Math.sin(a));
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+  }
+}
+
+function render() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.round(canvas.clientWidth * dpr), ch = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+  gl.viewport(0, 0, cw, ch);
+  gl.clearColor(0.55, 0.55, 0.55, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const lay = layout(), mvp = mvpFor(lay);
+
+  // What to draw: frozen study Curl, or the real ones.
+  let air = leaves, Lnow = L;
+  if ($('#hold').checked) {
+    air = new Map();
+    const t = parseFloat($('#holdT').value);
+    if (L < maxL()) air.set(L, { t, style: 'fwd' });
+    else air.set(L - 1, { t: 1 - t, style: 'back' });
+  }
+  const inAir = [...air.keys()].sort((a, b) => a - b);
+  const lo = inAir.length ? Math.min(inAir[0], Lnow) : Lnow;
+  const hi = inAir.length ? Math.max(inAir[inAir.length - 1] + 1, Lnow) : Lnow;
+  const leftIdx = lo - 1, rightIdx = hi;
+  const keepsLeft = !lay.single || opts.after === 'stays';
+
+  gl.bindVertexArray(vao);
+  gl.enable(gl.CULL_FACE);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.disable(gl.DEPTH_TEST);
+
+  // 1. Pages lying flat underneath.
+  gl.useProgram(pageProg.p);
+  const u = pageProg.u;
+  gl.uniformMatrix4fv(u.uMVP, false, mvp.M);
+  gl.uniform3fv(u.uEye, mvp.eye);
+  gl.uniform3fv(u.uPaper, PAPER_RGB);
+  gl.uniform1f(u.uShade, opts.shading);
+  gl.uniform1f(u.uGutter, lay.single ? 0 : 1);
+  gl.uniform1f(u.uLu, lay.frame.Lu);
+  gl.uniform1i(u.uTex, 0);
+  gl.activeTexture(gl.TEXTURE0);
+  if (keepsLeft && leafExists(leftIdx)) drawLeaf(leftIdx, 1, 'fwd', 0, lay, BACK, 1);
+  else if (keepsLeft && leftIdx < 0 && opts.view === 'facing') drawFirstFacingPage(lay);
+  if (leafExists(rightIdx)) drawLeaf(rightIdx, 0, 'fwd', 0, lay, FRONT, 1);
+
+  // Leaves between lo and hi: in the air, or resting flat between ones in the air.
+  const list = [];
+  for (let i = lo; i < hi; i++) {
+    if (!leafExists(i)) continue;
+    const lf = air.get(i);
+    if (lf) list.push({ i, t: lf.t, style: lf.style, moving: true });
+    else list.push({ i, t: i < Lnow ? 1 : 0, style: 'fwd', moving: false });
+  }
+
+  // 2. Shadows of the lifted leaves, only on paper (not on the grey background).
+  gl.useProgram(shadowProg.p);
+  const left = lay.single ? lay.cx - lay.W / 2 : lay.cx - lay.W, width = lay.single ? lay.W : lay.W * 2;
+  gl.enable(gl.SCISSOR_TEST);
+  gl.scissor(Math.round(left * dpr), Math.round((lay.cy - lay.H / 2) * dpr), Math.round(width * dpr), Math.round(lay.H * dpr));
+  for (const e of list) if (e.moving && opts.shadow > 0) drawShadow(e.t, e.style, e.i - lo, lay, mvp);
+  gl.disable(gl.SCISSOR_TEST);
+
+  // 3. The leaves themselves.
+  gl.useProgram(pageProg.p);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  for (const e of list) {
+    if (!keepsLeft && !e.moving && e.t === 1) continue;
+    const alpha = lay.single && opts.after === 'fades' ? 1 - smooth(0.55, 1, e.t) : 1;
+    drawLeaf(e.i, e.t, e.style, e.i - lo, lay, FRONT | BACK, alpha);
+  }
+}
+
+// Facing view, first Spread: page 1 lies alone on the left (not part of a leaf).
+function drawFirstFacingPage(lay) {
+  const F = lay.frame;
+  let k = 0;
+  for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+    const X = -(i / NU) * F.Lu, Y = (j / NV) * F.Lv;
+    pos[k++] = F.ox + F.ux * X + F.vx * Y; pos[k++] = F.oy + F.uy * X + F.vy * Y; pos[k++] = 0;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+  const u = pageProg.u;
+  gl.uniform1f(u.uAlpha, 1);
+  gl.cullFace(gl.FRONT);
+  gl.bindTexture(gl.TEXTURE_2D, pageTex(1));
+  gl.uniform3fv(u.uMapX, lay.maps.back[0]); gl.uniform3fv(u.uMapY, lay.maps.back[1]);
+  gl.uniform1f(u.uFade, 0);
+  gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+}
+
+// ---------- readout ----------
+function stateText() {
+  const viewName = { single: 'Single Page', facing: 'Facing', book: 'Book View' }[opts.view];
+  const rows = [`Showing:  ${spreadText()} of ${PAGES}  (${viewName})`];
+  const inAir = [...leaves.entries()].sort((a, b) => a[0] - b[0]);
+  rows.push(`Curls in the air: ${inAir.length} (most: ${opts.maxAir})`);
+  for (const [i, lf] of inAir) {
+    const done = lf.target === 1 ? lf.t : 1 - lf.t;
+    const n = Math.round(done * 12);
+    rows.push(`  page ${String(leafPages(i).front).padStart(3)} ${lf.target === 1 ? '→' : '←'} ${'█'.repeat(n)}${'░'.repeat(12 - n)} ${Math.round(done * 100)}%`);
+  }
+  rows.push(`Curl duration now: ${Math.round(tempo)} ms (normal ${opts.dur})`);
+  rows.push(`Gap between last taps: ${lastGap === null ? '-' : Math.round(lastGap) + ' ms'}`);
+  return rows.join('\n');
+}
+
+function choicesText() {
+  const v = VARIANTS.find(v => v.key === VARIANT);
+  const segLabel = key => SEGS.find(s => s[1] === key)[3].split('|').find(o => o.startsWith(opts[key] + ':')).split(':')[1];
+  const lines = ['Curl prototype choices', `Curl style: ${v.key} (${v.name})`, `Tested in: ${segLabel('view')}`];
+  for (const [, key, label, , , , , fmt, , only] of SLIDERS) if (!only || only.includes(VARIANT)) lines.push(`${label}: ${fmt(opts[key])}`);
+  lines.push(`Single Page, bends around its: ${segLabel('hinge')}`, `Single Page, after turning: ${segLabel('after')}`, `Single Page, back of page: ${segLabel('back')}`);
+  return lines.join('\n');
+}
+
+// ---------- input ----------
+const NEXT_KEYS = ['ArrowRight', 'ArrowDown', 'PageDown', ' '], PREV_KEYS = ['ArrowLeft', 'ArrowUp', 'PageUp'];
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA') return;
+  if (e.key === '[' || e.key === ']') { cycleVariant(e.key === ']' ? 1 : -1); e.preventDefault(); return; }
+  let dir = 0;
+  if (NEXT_KEYS.includes(e.key)) dir = e.key === ' ' && e.shiftKey ? -1 : 1;
+  else if (PREV_KEYS.includes(e.key)) dir = -1;
+  if (!dir) return;
+  e.preventDefault();
+  if (e.target instanceof HTMLElement && e.target !== document.body) e.target.blur();
+  turn(dir);
+});
+canvas.addEventListener('mousedown', e => {
+  const r = canvas.getBoundingClientRect();
+  turn(e.clientX - r.left < r.width / 2 ? -1 : 1);
+});
+let wheelAcc = 0;
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  wheelAcc += e.deltaY;
+  while (Math.abs(wheelAcc) >= 100) { turn(Math.sign(wheelAcc)); wheelAcc -= Math.sign(wheelAcc) * 100; }
+}, { passive: false });
+$('#prev').onclick = () => cycleVariant(-1);
+$('#next').onclick = () => cycleVariant(1);
+$('#copy').onclick = async () => {
+  const text = choicesText();
+  const out = $('#copyOut');
+  out.value = text;
+  out.style.display = 'block';
+  try { await navigator.clipboard.writeText(text); $('#copy').textContent = 'Copied! Paste it into the chat'; }
+  catch (err) { out.select(); $('#copy').textContent = 'Select the text below and press Ctrl+C'; }
+};
+
+// ---------- go ----------
+buildControls();
+refreshVisibility();
+tempo = opts.dur;
+setPage(parseInt(params.get('page') || '12', 10));
+if (params.has('hold')) { $('#hold').checked = true; $('#holdT').value = params.get('hold'); }
+
+let prev = performance.now(), lastReadout = 0;
+function frame(now) {
+  update(Math.min(100, now - prev));
+  prev = now;
+  render();
+  if (now - lastReadout > 80) { $('#state').textContent = stateText(); lastReadout = now; }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
