@@ -77,6 +77,7 @@
 #include "PageGridDialogCommon.h"
 #include "MeasurementToolbar.h"
 #include "SumatraLog.h"
+#include "skeuomorph/SpikeNoFlash.h"
 
 // if set instead of trying to render pages we don't have, we simply do nothing
 // this reduces the flickering when going quickly through pages but creates
@@ -3324,6 +3325,7 @@ static void OnPaintDocument(MainWindow* win) {
         if (!gNoFlickerRender || shouldPaint || showFocus) {
             win->buffer->Flush(hdc);
         }
+        SpikeAfterPaint(win, !gNoFlickerRender || shouldPaint || showFocus);
     }
     DrawCanvasKeyboardFocusIfNeeded(win, hdc);
 

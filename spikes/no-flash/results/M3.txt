@@ -1,0 +1,36 @@
+=== M3: layer=ondemand wait=1 flush=1 copy=lock size=max ===
+Canvas 3840x2170 at screen 0,122
+GPU memory (before layer): 1.2 MB local + 0.0 MB shared
+Setup on drawing thread: Intel(R) Iris(R) Xe Graphics; device 18.9 ms, layer+swap chain 2.5 ms, precompiled shaders 0.22 ms, rest 1.5 ms, total 23.1 ms
+GPU memory (after layer): 13.2 MB local + 0.0 MB shared
+Swap chain 3840x2170 x2 buffers = 63.6 MB held while the layer exists
+Shaders at runtime: load d3dcompiler_47.dll 0.7 ms, compile both 11.0 ms
+UI thread: starting the drawing thread took 0.11 ms; ready 35.3 ms later
+Screen copy to memory on UI thread, then upload:  3840x2170: UI thread 12.79 ms, drawing thread 6.97 ms (median of 10)
+Screen copy to memory on UI thread, then upload:  3063x2160: UI thread 11.26 ms, drawing thread 5.64 ms (median of 10)
+Screen copy GDI straight into GPU image (lock):   3840x2170: UI thread 5.54 ms, drawing thread 9.08 ms (median of 10)
+Screen copy GDI straight into GPU image (lock):   3063x2160: UI thread 4.48 ms, drawing thread 7.59 ms (median of 10)
+turn 1 (near): not recorded | cover shown 35.5 | UI waited 32.0 | copy old 2.6 new 5.2 upload 5.9 | 41 frames, 2 late, worst gap 33.6 ms
+turn 2 (near): not recorded | cover shown 29.3 | UI waited 22.8 | copy old 5.7 new 1.8 upload 12.4 | 42 frames, 1 late, worst gap 30.0 ms
+turn 3 (near): not recorded | cover shown 23.9 | UI waited 18.7 | copy old 4.0 new 1.7 upload 7.5 | 42 frames, 1 late, worst gap 32.2 ms
+turn 4 (near): not recorded | cover shown 17.7 | UI waited 13.7 | copy old 3.1 new 1.7 upload 6.5 | 43 frames, 1 late, worst gap 27.2 ms
+turn 5 (near): not recorded | cover shown 12.3 | UI waited 6.7 | copy old 4.7 new 1.7 upload 7.9 | 44 frames, 1 late, worst gap 27.2 ms
+turn 6 (near): not recorded | cover shown 27.1 | UI waited 20.5 | copy old 5.2 new 2.1 upload 8.2 | 42 frames, 2 late, worst gap 32.3 ms
+turn 7 (near): not recorded | cover shown 20.9 | UI waited 14.9 | copy old 5.1 new 2.0 upload 8.7 | 43 frames, 1 late, worst gap 27.5 ms
+turn 8 (near): not recorded | cover shown 13.0 | UI waited 8.6 | copy old 3.3 new 1.8 upload 6.3 | 44 frames, 1 late, worst gap 26.6 ms
+turn 9 (near): not recorded | cover shown 21.5 | UI waited 15.5 | copy old 5.0 new 2.3 upload 8.7 | 43 frames, 1 late, worst gap 27.4 ms
+turn 10 (near): not recorded | cover shown 18.7 | UI waited 12.5 | copy old 5.0 new 1.7 upload 8.4 | 43 frames, 1 late, worst gap 27.3 ms
+modal menu closed
+turn 11 (menu): not recorded | cover shown 14.9 | UI waited 10.6 | copy old 3.4 new 1.6 upload 6.9 | 44 frames, 1 late, worst gap 27.0 ms
+modal dialog closed
+turn 12 (dialog): not recorded | cover shown 22.6 | UI waited 15.9 | copy old 5.3 new 1.8 upload 13.5 | 43 frames, 1 late, worst gap 26.7 ms
+turn 13 (editbox): not recorded | cover shown 27.3 | UI waited 21.2 | copy old 5.3 new 6.9 upload 9.3 | 43 frames, 0 late, worst gap 24.3 ms
+turn 14 (far): not recorded | cover shown 20.7 | UI waited 14.7 | copy old 4.9 new 2.7 upload 8.3 | 43 frames, 1 late, worst gap 27.8 ms
+turn 15 (far): not recorded | cover shown 16.3 | UI waited 9.5 | copy old 5.7 new 3.5 upload 8.8 | 43 frames, 0 late, worst gap 24.4 ms
+turn 16 (far): not recorded | cover shown 13.2 | UI waited 6.8 | copy old 5.6 new 1.9 upload 8.5 | 43 frames, 1 late, worst gap 28.9 ms
+turn 17 (far): not recorded | cover shown 25.6 | UI waited 21.9 | copy old 2.5 new 3.9 upload 6.0 | 43 frames, 1 late, worst gap 25.9 ms
+turn 18 (far): not recorded | cover shown 24.4 | UI waited 18.6 | copy old 4.9 new 2.1 upload 8.1 | 43 frames, 0 late, worst gap 17.5 ms
+
+SUMMARY M3: 0 turns | flashes 0 | old Spread back 0 | gaps at removal 0 | frames missed by recorder 0
+  cover on screen after tap: median 21.5 ms, max 35.5 | UI waited median 15.5 max 32.0 | copy old median 5.0, new 2.0, upload 8.3
+  Curl frames: 772, late (>1.5 refreshes) 17

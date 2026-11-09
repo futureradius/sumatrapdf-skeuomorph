@@ -76,6 +76,7 @@ struct DocControllerCallback {
     // (re)laid out; refresh anything keyed by pageNo (selection, find, toolbar,
     // toc selection)
     virtual void PagesRenumbered(DisplayModel* dm) = 0;
+    virtual void BeforeSpreadChange(DisplayModel*, int /*newStartPage*/) {}
 };
 
 struct DocController;

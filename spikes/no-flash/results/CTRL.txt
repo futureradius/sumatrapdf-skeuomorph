@@ -1,0 +1,35 @@
+=== CTRL: layer=ondemand wait=0 flush=1 copy=ui size=fixed ===
+Canvas 1638x1000 at screen 35,151
+GPU memory (before layer): 1.2 MB local + 0.0 MB shared
+Setup on drawing thread: Intel(R) Iris(R) Xe Graphics; device 21.7 ms, layer+swap chain 2.7 ms, precompiled shaders 0.20 ms, rest 1.7 ms, total 26.3 ms
+GPU memory (after layer): 13.2 MB local + 0.0 MB shared
+Swap chain 1638x1000 x2 buffers = 12.5 MB held while the layer exists
+Shaders at runtime: load d3dcompiler_47.dll 0.7 ms, compile both 12.6 ms
+UI thread: starting the drawing thread took 0.05 ms; ready 40.3 ms later
+recorder: Desktop Duplication (every composed frame)
+Screen copy to memory on UI thread, then upload:  1638x1000: UI thread 3.00 ms, drawing thread 1.85 ms (median of 10)
+Screen copy to memory on UI thread, then upload:  1409x990 : UI thread 3.31 ms, drawing thread 1.75 ms (median of 10)
+Screen copy GDI straight into GPU image (lock):   1638x1000: UI thread 1.09 ms, drawing thread 2.71 ms (median of 10)
+Screen copy GDI straight into GPU image (lock):   1409x990 : UI thread 1.05 ms, drawing thread 2.43 ms (median of 10)
+turn  1 near       | first change  33.6 ms | cover shown  80.4 (presented  66.0) | UI waited  0.0 | Sumatra shows new    6.3 | see-through   97.0 | landed  715.1 | layer gone  730.6 | copy old  3.2 new  1.3 upload  2.5 |  46 frames, 0 late, 0 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  2 near       | first change  32.8 ms | cover shown  80.4 (presented  63.8) | UI waited  0.0 | Sumatra shows new    6.8 | see-through   97.7 | landed  714.0 | layer gone  730.8 | copy old  3.5 new  1.3 upload  2.5 |  47 frames, 0 late, 0 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  3 near       | first change  37.8 ms | cover shown  69.3 (presented  63.8) | UI waited  0.0 | Sumatra shows new    6.1 | see-through   86.0 | landed  703.1 | layer gone  719.7 | copy old  2.6 new  1.2 upload  3.6 |  44 frames, 0 late, 1 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  4 near       | first change  39.6 ms | cover shown  71.0 (presented  63.7) | UI waited  0.0 | Sumatra shows new    6.6 | see-through   87.8 | landed  705.7 | layer gone  721.5 | copy old  3.4 new  1.2 upload  2.1 |  42 frames, 0 late, 1 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  5 near       | first change  40.3 ms | cover shown  71.4 (presented  63.6) | UI waited  0.0 | Sumatra shows new    6.6 | see-through   88.2 | landed  705.1 | layer gone  721.9 | copy old  3.3 new  1.2 upload  2.3 |  45 frames, 0 late, 0 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  6 near       | first change  27.1 ms | cover shown  75.7 (presented  63.6) | UI waited  0.0 | Sumatra shows new    7.0 | see-through   92.4 | landed  709.4 | layer gone  726.2 | copy old  3.9 new  1.3 upload  2.7 |  43 frames, 0 late, 1 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  7 near       | first change  33.1 ms | cover shown  81.3 (presented  62.9) | UI waited  0.0 | Sumatra shows new    6.8 | see-through   97.9 | landed  715.0 | layer gone  731.7 | copy old  3.8 new  1.2 upload  3.2 |  46 frames, 0 late, 1 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  8 near       | first change  34.5 ms | cover shown  65.7 (presented  63.6) | UI waited  0.0 | Sumatra shows new    6.7 | see-through   82.4 | landed  716.1 | layer gone  732.7 | copy old  3.7 new  1.2 upload  1.6 |  44 frames, 0 late, 1 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn  9 near       | first change  25.2 ms | cover shown  73.9 (presented  63.6) | UI waited  0.0 | Sumatra shows new    6.9 | see-through   90.5 | landed  707.5 | layer gone  724.4 | copy old  3.4 new  1.7 upload  1.9 |  45 frames, 0 late, 0 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn 10 near       | first change  28.8 ms | cover shown  77.0 (presented  64.6) | UI waited  0.0 | Sumatra shows new    6.6 | see-through   93.7 | landed  710.6 | layer gone  727.2 | copy old  3.6 new  1.2 upload  1.5 |  44 frames, 0 late, 1 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+modal menu closed
+turn 11 menu       | first change  32.9 ms | cover shown  81.6 (presented  63.4) | UI waited  0.0 | Sumatra shows new    8.8 | see-through   97.8 | landed  714.8 | layer gone  732.0 | copy old  5.5 new  1.3 upload  2.1 |  45 frames, 0 late, 1 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+modal dialog closed
+turn 12 (dialog): no frames recorded
+turn 13 editbox    | first change  32.7 ms | cover shown  80.4 (presented  64.1) | UI waited  0.0 | Sumatra shows new    5.5 | see-through   96.9 | landed  714.0 | layer gone  730.7 | copy old  2.5 new  0.9 upload  3.2 |  42 frames, 0 late, 3 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn 14 far        | first change 272.5 ms | cover shown  71.1 (presented  62.5) | UI waited  0.0 | Sumatra shows new  362.5 | see-through  387.7 | landed  704.8 | layer gone  721.5 | copy old  2.7 new  1.4 upload  1.9 |  45 frames, 0 late, 1 missed by recorder | FLASH no, OLD BACK no, GAP no
+turn 15 far        | first change  16.0 ms | cover shown  80.3 (presented  63.9) | UI waited  0.0 | Sumatra shows new    8.5 | see-through   97.1 | landed  714.3 | layer gone  730.6 | copy old  2.5 new  0.9 upload  3.4 |  45 frames, 0 late, 0 missed by recorder | FLASH YES, OLD BACK YES, GAP no
+turn 16 far        | first change 282.5 ms | cover shown  81.2 (presented  64.1) | UI waited  0.0 | Sumatra shows new  436.3 | see-through  464.4 | landed  714.9 | layer gone  731.5 | copy old  2.6 new  1.7 upload  1.9 |  42 frames, 0 late, 3 missed by recorder | FLASH no, OLD BACK no, GAP no
+
+SUMMARY CTRL: 15 turns | flashes 13 | old Spread back 13 | gaps at removal 0 | frames missed by recorder 14
+  cover on screen after tap: median 77.0 ms, max 81.6 | UI waited median 0.0 max 0.0 | copy old median 3.4, new 1.2, upload 2.3
+  Curl frames: 601, late (>1.5 refreshes) 0

@@ -46,6 +46,9 @@
     <Filter Include="src\shared\tests">
       <UniqueIdentifier>{F5F2F2BB-E1EB-110E-0A1E-F792F675F119}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\skeuomorph">
+      <UniqueIdentifier>{C988AD5C-B556-A162-9EEA-11898A577DC7}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\tests">
       <UniqueIdentifier>{CF8328B6-3BEE-DC2C-842C-8ED2F0D5BA81}</UniqueIdentifier>
     </Filter>
@@ -704,6 +707,9 @@
     </ClInclude>
     <ClInclude Include="..\src\shared\gui\UIModels.h">
       <Filter>src\shared\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\skeuomorph\SpikeNoFlash.h">
+      <Filter>src\skeuomorph</Filter>
     </ClInclude>
     <ClInclude Include="..\src\uia\DocumentProvider.h">
       <Filter>src\uia</Filter>
@@ -1654,6 +1660,9 @@
     </ClCompile>
     <ClCompile Include="..\src\shared\tests\TextSelection_ut.cpp">
       <Filter>src\shared\tests</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\SpikeNoFlash.cpp">
+      <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\tests\Sumatra_ut.cpp">
       <Filter>src\tests</Filter>
