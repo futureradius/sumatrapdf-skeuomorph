@@ -39,7 +39,7 @@ The drawn stacks of paper edges beside a Spread: read pages on one side, unread 
 _Avoid_: book thickness, page stack
 
 **Rough Page**:
-A quick, half-sharp version of a page, prepared so a page the reader flips past still shows on its Curl. Replaced by the sharp page once that is ready.
+A quick, rougher version of a page, prepared so a page the reader flips past still shows on its Curl. Replaced by the sharp page once that is ready.
 _Avoid_: thumbnail, preview, low-res
 
 **Skeuomorph Page Turn**:
