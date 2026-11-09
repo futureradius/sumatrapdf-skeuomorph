@@ -1,0 +1,19 @@
+=== hw-1920x1200 ===
+  adapter 0: Intel(R) Iris(R) Xe Graphics (128 MB dedicated)
+  adapter 1: NVIDIA GeForce MX550 (1905 MB dedicated)
+  adapter 2: Microsoft Basic Render Driver (0 MB dedicated)
+Window client 1920x1200, screen refresh 16.67 ms (60 Hz)
+Device: Intel(R) Iris(R) Xe Graphics, feature level b000
+Setup: window 34 ms, D3D device 31 ms, layer 4 ms, shaders+pipeline 15 ms, page images 24 ms
+GPU memory used by this process: 13 MB local + 0 MB shared
+Snapshot copy (1920x1200): GDI buffer -> memory 1.04 ms, memory -> GPU 1.81 ms (median of 12)
+Snapshot copy, direct route: GDI buffer -> GPU 2.56 ms (median of 12)
+Layer hide 17.07 ms, show 16.87 ms (median of 10, until the compositor has it)
+  screenshot: results\hw-1920x1200-see-through.png
+see-through, 1 Curl    |  60.1 fps | frame ms median  16.7  p95  17.2  p99  17.4  max   17.9 | late frames   0/297  ( 0.0%) | GPU ms median  1.02  p95  4.69 | CPU ms median 0.66
+1 Curl                 |  60.0 fps | frame ms median  16.7  p95  17.2  p99  17.4  max   17.6 | late frames   0/299  ( 0.0%) | GPU ms median  4.39  p95  6.29 | CPU ms median 0.65
+  screenshot: results\hw-1920x1200-5-curls.png
+5 Curls                |  59.8 fps | frame ms median  16.7  p95  17.2  p99  17.4  max   33.4 | late frames   1/296  ( 0.3%) | GPU ms median  5.61  p95  7.79 | CPU ms median 0.67
+  screenshot: results\hw-1920x1200-5-curls-bundle.png
+5 Curls + Bundle       |  60.0 fps | frame ms median  16.7  p95  17.3  p99  17.7  max   20.4 | late frames   0/296  ( 0.0%) | GPU ms median  6.54  p95  9.40 | CPU ms median 0.62
+GPU memory used by this process: 120 MB local + 0 MB shared

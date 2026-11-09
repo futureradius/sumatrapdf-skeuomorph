@@ -1,0 +1,19 @@
+=== warp-1920x1200 ===
+  adapter 0: Intel(R) Iris(R) Xe Graphics (128 MB dedicated)
+  adapter 1: NVIDIA GeForce MX550 (1905 MB dedicated)
+  adapter 2: Microsoft Basic Render Driver (0 MB dedicated)
+Window client 1920x1200, screen refresh 16.67 ms (60 Hz)
+Device: Microsoft Basic Render Driver, feature level b000
+Setup: window 40 ms, D3D device 7 ms, layer 2 ms, shaders+pipeline 18 ms, page images 22 ms
+GPU memory used by this process: 0 MB local + 0 MB shared
+Snapshot copy (1920x1200): GDI buffer -> memory 1.77 ms, memory -> GPU 14.48 ms (median of 12)
+Snapshot copy, direct route: GDI buffer -> GPU 16.02 ms (median of 12)
+Layer hide 16.90 ms, show 16.85 ms (median of 10, until the compositor has it)
+  screenshot: results\warp-1920x1200-see-through.png
+see-through, 1 Curl    |  60.0 fps | frame ms median  16.7  p95  17.1  p99  17.3  max   17.5 | late frames   0/298  ( 0.0%) | GPU ms median  4.27  p95  4.66 | CPU ms median 0.21
+1 Curl                 |  60.0 fps | frame ms median  16.7  p95  16.9  p99  17.2  max   17.3 | late frames   0/300  ( 0.0%) | GPU ms median 12.26  p95 12.99 | CPU ms median 0.25
+  screenshot: results\warp-1920x1200-5-curls.png
+5 Curls                |  28.3 fps | frame ms median  33.3  p95  50.0  p99  50.1  max   50.1 | late frames 140/140  (100.0%) | GPU ms median 30.84  p95 33.50 | CPU ms median 0.37
+  screenshot: results\warp-1920x1200-5-curls-bundle.png
+5 Curls + Bundle       |  16.4 fps | frame ms median  66.6  p95  66.8  p99  67.0  max   67.8 | late frames  81/81   (100.0%) | GPU ms median 50.47  p95 56.91 | CPU ms median 0.66
+GPU memory used by this process: 0 MB local + 0 MB shared

@@ -1,0 +1,19 @@
+=== warp-maximized ===
+  adapter 0: Intel(R) Iris(R) Xe Graphics (128 MB dedicated)
+  adapter 1: NVIDIA GeForce MX550 (1905 MB dedicated)
+  adapter 2: Microsoft Basic Render Driver (0 MB dedicated)
+Window client 3840x2241, screen refresh 16.67 ms (60 Hz)
+Device: Microsoft Basic Render Driver, feature level b000
+Setup: window 44 ms, D3D device 5 ms, layer 2 ms, shaders+pipeline 12 ms, page images 82 ms
+GPU memory used by this process: 0 MB local + 0 MB shared
+Snapshot copy (3840x2241): GDI buffer -> memory 3.74 ms, memory -> GPU 12.18 ms (median of 12)
+Snapshot copy, direct route: GDI buffer -> GPU 16.13 ms (median of 12)
+Layer hide 16.81 ms, show 17.03 ms (median of 10, until the compositor has it)
+  screenshot: results\warp-maximized-see-through.png
+see-through, 1 Curl    |  58.2 fps | frame ms median  16.7  p95  16.9  p99  33.3  max   33.4 | late frames   9/285  ( 3.2%) | GPU ms median 12.21  p95 15.64 | CPU ms median 0.19
+1 Curl                 |  21.7 fps | frame ms median  50.0  p95  50.3  p99  66.7  max   66.7 | late frames 109/109  (100.0%) | GPU ms median 46.66  p95 49.53 | CPU ms median 0.28
+  screenshot: results\warp-maximized-5-curls.png
+5 Curls                |   9.3 fps | frame ms median 100.4  p95 116.7  p99 116.8  max  116.8 | late frames  45/45   (100.0%) | GPU ms median 98.57  p95 109.57 | CPU ms median 0.39
+  screenshot: results\warp-maximized-5-curls-bundle.png
+5 Curls + Bundle       |   6.9 fps | frame ms median 145.8  p95 166.7  p99 183.3  max  183.3 | late frames  33/33   (100.0%) | GPU ms median 135.01  p95 159.16 | CPU ms median 0.73
+GPU memory used by this process: 0 MB local + 0 MB shared
