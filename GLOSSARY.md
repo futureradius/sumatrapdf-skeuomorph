@@ -16,10 +16,14 @@ _Avoid_: page pair, double page
 Any view where all pages scroll as one long strip. Has no Page Turn.
 _Avoid_: scroll mode
 
+**Right-to-Left Reading**:
+Reading a book whose spine is on the right, so pages are turned from left to right, as in manga. Set by the document or by SumatraPDF's Manga Mode.
+_Avoid_: R2L, RTL document, mirrored, manga mode (that is the switch, not the reading)
+
 ## Page turning
 
 **Page Turn**:
-Moving from one Spread to another in a Paged View, whether to the next one or a jump many pages away.
+Moving from one Spread to another in a Paged View, whether to the next one or a jump many pages away. One action is one Page Turn, however many steps it takes inside. Re-pairing the pages (switching view mode, "step one page") is not a Page Turn.
 _Avoid_: page flip, scroll, page change
 
 **Curl**:
@@ -33,6 +37,10 @@ _Avoid_: page stack, multi-page flip
 **Page Edges**:
 The drawn stacks of paper edges beside a Spread: read pages on one side, unread pages on the other, each as thick as its share of the book.
 _Avoid_: book thickness, page stack
+
+**Rough Page**:
+A quick, half-sharp version of a page, prepared so a page the reader flips past still shows on its Curl. Replaced by the sharp page once that is ready.
+_Avoid_: thumbnail, preview, low-res
 
 **Skeuomorph Page Turn**:
 The user setting that turns Curls, Bundles and Page Edges on or off together. When off, a Page Turn is an instant jump, as in original SumatraPDF.
