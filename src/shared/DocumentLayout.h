@@ -41,6 +41,7 @@ struct DocumentLayoutParams {
     Vec<u8> spreadFlags;
     // non-continuous facing / book view: the row starts at startPage (#6487)
     bool stepOnePage = false;
+    bool pageBesideSpine = false; // Skeuomorph Page Turn: lone page beside the spine
     // half a viewport of scroll room around the pages, so any point of a page
     // can be brought to the center of the window
     bool freePan = false;

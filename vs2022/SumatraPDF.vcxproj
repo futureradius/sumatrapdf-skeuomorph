@@ -1608,6 +1608,7 @@
     <ClInclude Include="..\src\shared\gui\PlatformFont.h" />
     <ClInclude Include="..\src\shared\gui\PlatformText.h" />
     <ClInclude Include="..\src\shared\gui\UIModels.h" />
+    <ClInclude Include="..\src\skeuomorph\PageEdges.h" />
     <ClInclude Include="..\src\skeuomorph\PageTurnDetect.h" />
     <ClInclude Include="..\src\skeuomorph\PageTurnHooks.h" />
     <ClInclude Include="..\src\skeuomorph\PageTurnLogic.h" />
@@ -2480,6 +2481,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile|ARM64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile x64_asan|x64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\PageEdges.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageTurnDetect.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageTurnHooks.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageTurnLogic.cpp" />

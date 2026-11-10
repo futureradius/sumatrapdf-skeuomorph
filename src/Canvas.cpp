@@ -3097,6 +3097,7 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
     if (savedDC) {
         RestoreDC(hdc, savedDC);
     }
+    PageEdgesPaint(win, hdc, dm);
 
     bool rendering = false;
     Rect screen(Point(), dm->GetViewPort().Size());

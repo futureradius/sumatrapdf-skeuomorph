@@ -17,6 +17,9 @@ constexpr float kBundleMaxPx = 18;
 constexpr float kPxPerSheet = 1.1f;
 constexpr int kMinSheets = 2;
 constexpr int kMaxSheets = 14;
+// fine Page Edge lines every 1.6 px at 96 dpi, as in the prototype
+constexpr float kEdgeLineGap = 1.6f;
+constexpr int kBaseDpi = 96;
 
 // pages on screen together; Single Page: first == last
 struct Spread {
@@ -111,9 +114,29 @@ struct EdgesPx {
     int right = 0;
 };
 
+// what hook 4 left in windowMargin.left / .right
+struct Room {
+    int added = 0;
+    int left = 0;
+    int right = 0;
+};
+
+// one 1 px column of resting Page Edges
+enum class EdgeLine {
+    None,
+    Fine,
+    Rim
+};
+
 int WholePx(float px);
 float BookPx(int pageCount);
+int ScaleByDpi(int px, int dpi);
 EdgesPx SplitEdges(int pageCount, Spread at, Reading reading);
+EdgesPx SplitEdges(int pageCount, Spread at, Reading reading, int wholePx);
+EdgesPx RestingEdges(int pageCount, Spread at, Layout layout, Reading reading, int wholePx);
+int RoomPx(int pageCount, Layout layout);
+Room ApplyRoom(Room last, int curLeft, int curRight, int px);
+EdgeLine EdgeLineAt(int col, int thickPx, int dpi);
 float BundlePx(int pages);
 int BundleSheets(float bundlePx);
 

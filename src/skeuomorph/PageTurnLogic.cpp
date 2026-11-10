@@ -187,18 +187,30 @@ float BookPx(int pageCount) {
     return limitValue(px, (float)kBookMinPx, (float)kBookMaxPx);
 }
 
+// px written at 96 dpi to the window's dpi, like WindowMargin: the
+// prototype's 46 px were judged in Edge at 150%, i.e. 69 screen px
+int ScaleByDpi(int px, int dpi) {
+    if (dpi <= 0) {
+        dpi = kBaseDpi;
+    }
+    return (px * dpi + kBaseDpi / 2) / kBaseDpi;
+}
+
+EdgesPx SplitEdges(int pageCount, Spread at, Reading reading) {
+    return SplitEdges(pageCount, at, reading, WholePx(BookPx(pageCount)));
+}
+
 // the whole book split by share of pages off the Spread: read before it,
 // unread after it. Sides sum to the whole; a side with pages gets at least
 // 1 px. Nothing when every page is on screen
-EdgesPx SplitEdges(int pageCount, Spread at, Reading reading) {
+EdgesPx SplitEdges(int pageCount, Spread at, Reading reading, int whole) {
     EdgesPx e;
     int nRead = std::max(at.first - 1, 0);
     int nUnread = std::max(pageCount - at.last, 0);
     int off = nRead + nUnread;
-    if (at.first <= 0 || off <= 0) {
+    if (at.first <= 0 || off <= 0 || whole <= 0) {
         return e;
     }
-    int whole = WholePx(BookPx(pageCount));
     int read = (int)lroundf((float)whole * nRead / off);
     int lo = nRead > 0 ? 1 : 0;
     int hi = nUnread > 0 ? whole - 1 : whole;
@@ -208,6 +220,61 @@ EdgesPx SplitEdges(int pageCount, Spread at, Reading reading) {
     e.left = r2l ? e.unread : e.read;
     e.right = r2l ? e.read : e.unread;
     return e;
+}
+
+// what SumatraPDF paints at rest. Single Page: read pages just fade away,
+// only the unread side shows (right, left in Right-to-Left Reading)
+EdgesPx RestingEdges(int pageCount, Spread at, Layout layout, Reading reading, int wholePx) {
+    EdgesPx e = SplitEdges(pageCount, at, reading, wholePx);
+    if (layout != Layout::Single) {
+        return e;
+    }
+    bool r2l = reading == Reading::RightToLeft;
+    e.read = 0;
+    e.left = r2l ? e.unread : 0;
+    e.right = r2l ? 0 : e.unread;
+    return e;
+}
+
+// room on each side of the Spread (96 dpi): the whole book, since on the last
+// page all paper is on one side. None when every page is always on screen
+// (1 page; Facing with 2), as there are never Page Edges to show
+int RoomPx(int pageCount, Layout layout) {
+    if (pageCount <= 1 || (layout == Layout::Facing && pageCount <= 2)) {
+        return 0;
+    }
+    return WholePx(BookPx(pageCount));
+}
+
+// sets the room in the margin to px. If the margin isn't what was left there
+// last time, SetUiDpi or Presentation reset it and it's the new base
+Room ApplyRoom(Room last, int curLeft, int curRight, int px) {
+    int baseLeft = curLeft;
+    int baseRight = curRight;
+    if (curLeft == last.left && curRight == last.right) {
+        baseLeft -= last.added;
+        baseRight -= last.added;
+    }
+    return {px, baseLeft + px, baseRight + px};
+}
+
+// col 0 touches the page. Fine lines every 1.6 px (scaled to dpi) at
+// col = round(k x gap), as in the prototype; the outermost col is the rim
+//   page |..||.||.|.||.||  <- rim
+EdgeLine EdgeLineAt(int col, int thickPx, int dpi) {
+    if (col < 0 || col >= thickPx) {
+        return EdgeLine::None;
+    }
+    if (col == thickPx - 1) {
+        return EdgeLine::Rim;
+    }
+    float gap = kEdgeLineGap * (dpi > 0 ? dpi : kBaseDpi) / kBaseDpi;
+    for (int k = 1; k * gap < col + 1; k++) {
+        if (lroundf(k * gap) == col) {
+            return EdgeLine::Fine;
+        }
+    }
+    return EdgeLine::None;
 }
 
 float BundlePx(int pages) {

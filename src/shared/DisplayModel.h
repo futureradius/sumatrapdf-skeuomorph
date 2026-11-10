@@ -429,6 +429,7 @@ struct DisplayModel : DocController {
     bool freePan = false;
     // facing / book view moves one page at a time (#6487)
     bool facingStepOne = false;
+    bool pageBesideSpine = false; // Skeuomorph Page Turn: lone page beside the spine
     // CmdToggleMirror: pages shown mirrored left to right
     bool mirror = false;
     // set by GoToNextPage() when stepping one page: GoToPage() starts the row

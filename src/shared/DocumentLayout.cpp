@@ -287,6 +287,9 @@ static void RelayoutRows(DocumentLayout& layout, bool isFitContent) {
             columnMaxWidth[1] = columnMaxWidth[0];
         }
     }
+    if (params.pageBesideSpine && (columnMaxWidth[0] == 0) != (columnMaxWidth[1] == 0)) {
+        columnMaxWidth[0] = columnMaxWidth[1] = std::max(columnMaxWidth[0], columnMaxWidth[1]);
+    }
 
     int twoColDx = columnMaxWidth[0] + params.pageSpacing.dx + columnMaxWidth[1];
     int pagesDx = single ? maxFullRowWidth : twoColDx;
@@ -306,7 +309,7 @@ static void RelayoutRows(DocumentLayout& layout, bool isFitContent) {
         int pageOffX = offX + params.windowMargin.left;
         for (int pageNo = row.firstPage; pageNo <= row.lastPage; pageNo++) {
             DocumentLayoutPage* page = layout.GetPage(pageNo);
-            if (single || row.isSpread || (cover && !IsContinuous(params.displayMode))) {
+            if (single || row.isSpread || (cover && !IsContinuous(params.displayMode) && !params.pageBesideSpine)) {
                 page->pos.x = pageOffX + ((pagesDx - page->pos.dx) / 2);
             } else if (!cover && pageNo == row.firstPage) {
                 page->pos.x = pageOffX + columnMaxWidth[0] - page->pos.dx;

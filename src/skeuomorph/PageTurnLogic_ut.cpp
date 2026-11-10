@@ -416,6 +416,107 @@ static void InAirTest() {
     }
 }
 
+static bool SameRoom(Room r, int added, int left, int right) {
+    return r.added == added && r.left == left && r.right == right;
+}
+
+static void RoomTest() {
+    // whole book at 96 dpi, scaled like WindowMargin
+    utassert(RoomPx(40, Layout::Book) == 14);
+    utassert(RoomPx(800, Layout::Single) == 46);
+    utassert(RoomPx(2, Layout::Book) == 4);
+    utassert(RoomPx(2, Layout::Single) == 4);
+    utassert(RoomPx(3, Layout::Facing) == 4);
+    // every page always on screen: no Page Edges, no room
+    utassert(RoomPx(1, Layout::Book) == 0);
+    utassert(RoomPx(1, Layout::Single) == 0);
+    utassert(RoomPx(2, Layout::Facing) == 0);
+    utassert(RoomPx(0, Layout::Facing) == 0);
+
+    utassert(ScaleByDpi(46, 96) == 46);
+    utassert(ScaleByDpi(46, 144) == 69);
+    utassert(ScaleByDpi(14, 144) == 21);
+    utassert(ScaleByDpi(14, 192) == 28);
+    utassert(ScaleByDpi(5, 0) == 5);
+
+    // added once, kept on re-layout, removed again
+    Room r = ApplyRoom({}, 4, 2, 10);
+    utassert(SameRoom(r, 10, 14, 12));
+    r = ApplyRoom(r, 14, 12, 10);
+    utassert(SameRoom(r, 10, 14, 12));
+    r = ApplyRoom(r, 14, 12, 21);
+    utassert(SameRoom(r, 21, 25, 23));
+    r = ApplyRoom(r, 25, 23, 0);
+    utassert(SameRoom(r, 0, 4, 2));
+    r = ApplyRoom(r, 4, 2, 0);
+    utassert(SameRoom(r, 0, 4, 2));
+
+    // SetUiDpi reset the margin: it's the new base
+    r = ApplyRoom({10, 14, 14}, 6, 6, 10);
+    utassert(SameRoom(r, 10, 16, 16));
+    // Presentation zeroes it and gets no room; leaving it, SetUiDpi restores
+    r = ApplyRoom({10, 14, 14}, 0, 0, 0);
+    utassert(SameRoom(r, 0, 0, 0));
+    r = ApplyRoom(r, 4, 4, 10);
+    utassert(SameRoom(r, 10, 14, 14));
+    // a zero margin with no room yet
+    r = ApplyRoom({}, 0, 0, 7);
+    utassert(SameRoom(r, 7, 7, 7));
+}
+
+static bool SameSides(EdgesPx e, int left, int right) {
+    return e.left == left && e.right == right;
+}
+
+static void RestingEdgesTest() {
+    auto ltr = Reading::LeftToRight;
+    auto rtl = Reading::RightToLeft;
+
+    // Single Page: only the unread side, right (left in right-to-left)
+    utassert(SameSides(RestingEdges(800, {1, 1}, Layout::Single, ltr, 69), 0, 69));
+    utassert(SameSides(RestingEdges(800, {1, 1}, Layout::Single, rtl, 69), 69, 0));
+    utassert(SameSides(RestingEdges(800, {400, 400}, Layout::Single, ltr, 46), 0, 23));
+    utassert(SameSides(RestingEdges(800, {400, 400}, Layout::Single, rtl, 46), 23, 0));
+    utassert(SameSides(RestingEdges(800, {800, 800}, Layout::Single, ltr, 46), 0, 0));
+
+    // Facing / Book View: both sides, as SplitEdges
+    utassert(SameSides(RestingEdges(800, {399, 400}, Layout::Facing, ltr, 46), 23, 23));
+    utassert(SameSides(RestingEdges(800, {599, 600}, Layout::Book, rtl, 46), 12, 34));
+    // lone cover: paper right of it; lone last page: left (mirrored in rtl)
+    utassert(SameSides(RestingEdges(40, {1, 1}, Layout::Book, ltr, 21), 0, 21));
+    utassert(SameSides(RestingEdges(40, {40, 40}, Layout::Book, ltr, 21), 21, 0));
+    utassert(SameSides(RestingEdges(40, {40, 40}, Layout::Book, rtl, 21), 0, 21));
+
+    // every page on screen, or no room: nothing
+    utassert(SameSides(RestingEdges(2, {1, 2}, Layout::Facing, ltr, 4), 0, 0));
+    utassert(SameSides(RestingEdges(40, {5, 6}, Layout::Facing, ltr, 0), 0, 0));
+
+    // the split follows the scaled whole: sides sum to it
+    EdgesPx e = SplitEdges(800, {399, 400}, ltr, 69);
+    utassert(e.read + e.unread == 69 && e.read == 34);
+}
+
+static void EdgeLineTest() {
+    // 96 dpi: lines at round(1.6 k) = 2, 3, 5, 6, 8, ...; outermost is the rim
+    utassert(EdgeLineAt(0, 14, 96) == EdgeLine::None);
+    utassert(EdgeLineAt(1, 14, 96) == EdgeLine::None);
+    utassert(EdgeLineAt(2, 14, 96) == EdgeLine::Fine);
+    utassert(EdgeLineAt(3, 14, 96) == EdgeLine::Fine);
+    utassert(EdgeLineAt(4, 14, 96) == EdgeLine::None);
+    utassert(EdgeLineAt(5, 14, 96) == EdgeLine::Fine);
+    utassert(EdgeLineAt(13, 14, 96) == EdgeLine::Rim);
+    utassert(EdgeLineAt(14, 14, 96) == EdgeLine::None);
+    utassert(EdgeLineAt(-1, 14, 96) == EdgeLine::None);
+
+    // 144 dpi: every 2.4 px = 2, 5, 7, 10, 12, ...
+    utassert(EdgeLineAt(2, 21, 144) == EdgeLine::Fine);
+    utassert(EdgeLineAt(3, 21, 144) == EdgeLine::None);
+    utassert(EdgeLineAt(4, 21, 144) == EdgeLine::None);
+    utassert(EdgeLineAt(5, 21, 144) == EdgeLine::Fine);
+    utassert(EdgeLineAt(7, 21, 144) == EdgeLine::Fine);
+    utassert(EdgeLineAt(20, 21, 144) == EdgeLine::Rim);
+}
+
 void PageTurnLogic_UnitTests() {
     SpreadOfTest();
     ClassifyTest();
@@ -423,6 +524,9 @@ void PageTurnLogic_UnitTests() {
     GateTest();
     NamesTest();
     SizesTest();
+    RoomTest();
+    RestingEdgesTest();
+    EdgeLineTest();
     LengthTest();
     FastTapTest();
     EaseBackTest();

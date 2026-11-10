@@ -10,5 +10,6 @@ int PageTurnDurationMs();
 
 void PageTurnBeforeSpread(MainWindow* win, DisplayModel* dm, int pageNo);
 void PageTurnBeforeRelayout(MainWindow* win, DisplayModel* dm);
+void PageEdgesPaint(MainWindow* win, HDC hdc, DisplayModel* dm);
 void PageTurnAfterPaint(MainWindow* win, bool flushed);
 void PageTurnForget(MainWindow* win, DisplayModel* dm);

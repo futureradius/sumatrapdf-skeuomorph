@@ -2211,6 +2211,7 @@ void DisplayModel::Relayout(float newZoomVirtual, int newRotation) {
     if (!pagesInfo) {
         return;
     }
+    cb->BeforeRelayout(this);
 
     rotation = NormalizeRotation(newRotation);
     zoomVirtual = newZoomVirtual;
@@ -2304,6 +2305,7 @@ void DisplayModel::Relayout(float newZoomVirtual, int newRotation) {
         params.freePan = freePan && !inPresentation;
         params.landscapeAsSpread = ShouldTreatLandscapeAsSpread();
         params.stepOnePage = StepsOnePage();
+        params.pageBesideSpine = pageBesideSpine;
         if (params.landscapeAsSpread) {
             EnsureSpreadFlags();
             params.spreadFlags = spreadFlags;
