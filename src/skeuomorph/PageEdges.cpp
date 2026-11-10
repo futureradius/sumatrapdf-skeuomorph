@@ -44,6 +44,23 @@ struct RoomOf {
 
 static Vec<RoomOf*> gRooms;
 
+// the display mode a document was last laid out in
+struct ModeOf {
+    DisplayModel* dm = nullptr;
+    DisplayMode mode = DisplayMode::Automatic;
+};
+
+static Vec<ModeOf*> gModes;
+
+static int FindMode(DisplayModel* dm) {
+    for (int i = 0; i < len(gModes); i++) {
+        if (gModes[i]->dm == dm) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int FindRoom(DisplayModel* dm) {
     for (int i = 0; i < len(gRooms); i++) {
         if (gRooms[i]->dm == dm) {
@@ -103,12 +120,60 @@ static void SetRoom(DisplayModel* dm, int px) {
 void EdgesBeforeRelayout(DisplayModel* dm) {
     dm->pageBesideSpine = EdgesOn(dm);
     SetRoom(dm, RoomOnScreen(dm));
+
+    int i = FindMode(dm);
+    if (i < 0) {
+        ModeOf* m = new ModeOf();
+        m->dm = dm;
+        VecAppend(gModes, m);
+        i = len(gModes) - 1;
+    }
+    gModes[i]->mode = dm->GetDisplayMode();
+}
+
+// true when ChangeStartPage(pageNo) won't re-lay out: same start page and
+// the same pages shown
+static bool SameSpreadShown(DisplayModel* dm, int pageNo) {
+    if (dm->startPage != pageNo) {
+        return false;
+    }
+    int first = dm->FirstPageInRow(pageNo);
+    int last = dm->LastPageInRow(pageNo);
+    for (int p = 1; p <= dm->PageCount(); p++) {
+        if (dm->GetPageInfo(p)->isShown != (p >= first && p <= last)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// hook 3, just before ChangeStartPage. A view switch that keeps the same
+// pages on screen (the cover from Book View to Single Page, a lone last page)
+// isn't re-laid out by SumatraPDF, which left it where the old view put it.
+// Lay it out for the new view, where the room and the cover beside the spine
+// differ
+void EdgesBeforeSpread(DisplayModel* dm, int pageNo) {
+    if (!EdgesOn(dm) || !dm->pagesInfo) {
+        return;
+    }
+    int i = FindMode(dm);
+    if (i >= 0 && gModes[i]->mode == dm->GetDisplayMode()) {
+        return;
+    }
+    if (SameSpreadShown(dm, pageNo)) {
+        dm->Relayout(dm->zoomVirtual, dm->rotation);
+    }
 }
 
 // dm dies, or trimming margins re-lays it out right after: give the margin
 // back, so a new dm at the same address starts clean
 void EdgesForget(DisplayModel* dm) {
     SetRoom(dm, 0);
+    int i = FindMode(dm);
+    if (i >= 0) {
+        delete gModes[i];
+        VecRemoveAt(gModes, i);
+    }
 }
 
 // the switch changed: room and cover move at once, like a zoom change

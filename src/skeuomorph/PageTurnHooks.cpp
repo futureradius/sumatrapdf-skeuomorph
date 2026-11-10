@@ -23,8 +23,9 @@ int PageTurnDurationMs() {
 }
 
 // hook 3: GoToPage is about to swap the Spread
-void PageTurnBeforeSpread(MainWindow* win, DisplayModel* dm, int) {
+void PageTurnBeforeSpread(MainWindow* win, DisplayModel* dm, int pageNo) {
     DetectBeforeSpread(win, dm);
+    EdgesBeforeSpread(dm, pageNo);
 }
 
 // hook 4: room for Page Edges and the cover flag
