@@ -735,6 +735,9 @@
     <ClInclude Include="..\src\skeuomorph\ScreenCopy.h">
       <Filter>src\skeuomorph</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\skeuomorph\WindowChanges.h">
+      <Filter>src\skeuomorph</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\uia\DocumentProvider.h">
       <Filter>src\uia</Filter>
     </ClInclude>
@@ -1710,6 +1713,9 @@
       <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\skeuomorph\ScreenCopy.cpp">
+      <Filter>src\skeuomorph</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\WindowChanges.cpp">
       <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\tests\Sumatra_ut.cpp">

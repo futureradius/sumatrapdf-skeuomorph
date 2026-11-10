@@ -10,13 +10,14 @@
 #include "skeuomorph/PageTurnDetect.h"
 #include "skeuomorph/PageEdges.h"
 #include "skeuomorph/CurlRenderer.h"
+#include "skeuomorph/WindowChanges.h"
 #include "skeuomorph/PageTurnHooks.h"
 
 // View / Skeuomorph Page Turn; saved at once so it survives a crash
 void ToggleSkeuomorphPageTurn() {
     gSettings->skeuomorphPageTurn = !gSettings->skeuomorphPageTurn;
     ScheduleSaveSettings();
-    CurlLandAllWindows();
+    DetectLandAllWindows("switch off");
     EdgesRelayoutAll();
 }
 
@@ -31,8 +32,9 @@ void PageTurnBeforeSpread(MainWindow* win, DisplayModel* dm, int pageNo) {
     EdgesBeforeSpread(dm, pageNo);
 }
 
-// hook 4: room for Page Edges and the cover flag
-void PageTurnBeforeRelayout(MainWindow*, DisplayModel* dm) {
+// hook 4: room for Page Edges and the cover flag; zoom, rotation & co. land Curls
+void PageTurnBeforeRelayout(MainWindow* win, DisplayModel* dm) {
+    DetectBeforeRelayout(win);
     EdgesBeforeRelayout(dm);
 }
 
@@ -44,6 +46,9 @@ void PageEdgesPaint(MainWindow*, HDC hdc, DisplayModel* dm) {
 // hook 6: flushed = the screen now shows SumatraPDF's own picture
 void PageTurnAfterPaint(MainWindow* win, bool flushed) {
     DetectAfterPaint(win, flushed);
+    if (gSettings->skeuomorphPageTurn) {
+        WatchWindowChanges(win);
+    }
 }
 
 // hook 8: dm is going away, a new one may get its address

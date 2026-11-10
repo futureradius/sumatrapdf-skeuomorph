@@ -121,6 +121,7 @@ struct Cmd {
     CurlSpread now;           // ShowsNew
     bool haveLanding = false; // ShowsNew: the landing page was copied
     Size size;                // Resize
+    const char* why = "";     // LandAll, Resize: for the log
 };
 
 enum class Load {
@@ -611,24 +612,28 @@ static void Publish(Renderer* r, const Flight& f) {
 // one line per Curl, beside the per-turn line (another prefix, so the
 // tests/skeuomorph-*.ts parsers don't count it):
 //   skeuomorph-curl: #3 landed after 702 ms, 42 frames, 0 late, covered 12.8 ms, UI waited 12.1 ms
-static void LogFlight(Renderer* r, const Flight& f, LandHow how) {
+//   skeuomorph-curl: #4 landed at once (resize) after 310 ms, 18 frames, ...
+static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why) {
     r->mutex.Lock();
     double uiWait = r->uiWaitId == f.times.id ? r->uiWaitMs : 0;
     r->mutex.Unlock();
     const CurlTimes& tm = f.times;
-    Str what = how == LandHow::Done     ? StrL("landed")
-               : how == LandHow::AtOnce ? StrL("landed at once")
-                                        : StrL("TIMEOUT");
+    TempStr what = StrL("TIMEOUT");
+    if (how == LandHow::Done) {
+        what = StrL("landed");
+    } else if (how == LandHow::AtOnce) {
+        what = fmt("landed at once (%s)", Str(why));
+    }
     double covered = tm.covered > 0 ? tm.covered - tm.start : -1;
     logf("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms\n", tm.id, what,
          (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait);
 }
 #else
-static void LogFlight(Renderer*, const Flight&, LandHow) {}
+static void LogFlight(Renderer*, const Flight&, LandHow, const char*) {}
 #endif
 
-// the layer goes now; tell a waiting UI thread
-static void Land(Renderer* r, Gpu& g, Flight& f, LandHow how) {
+// the layer goes now; tell a waiting UI thread. why: for the log, landed at once
+static void Land(Renderer* r, Gpu& g, Flight& f, LandHow how, const char* why = "") {
     if (!f.animating) {
         return;
     }
@@ -642,7 +647,7 @@ static void Land(Renderer* r, Gpu& g, Flight& f, LandHow how) {
     f.times.timedOut = how == LandHow::TimedOut;
     f.times.landedAtOnce = how == LandHow::AtOnce;
     Publish(r, f);
-    LogFlight(r, f, how);
+    LogFlight(r, f, how, why);
 
     r->mutex.Lock();
     r->coveredId = std::max(r->coveredId, f.turn.id);
@@ -660,7 +665,7 @@ static void StartFlight(Renderer* r, Gpu& g, Flight& f, const TurnData& turn) {
         f.animating = false;
         f.times.gone = CurlNowMs();
         f.times.landedAtOnce = true;
-        LogFlight(r, f, LandHow::AtOnce);
+        LogFlight(r, f, LandHow::AtOnce, "next Curl");
         r->mutex.Lock();
         r->goneId = std::max(r->goneId, f.turn.id);
         r->mutex.Unlock();
@@ -743,7 +748,7 @@ static bool DrawFrame(Renderer* r, Gpu& g, Flight& f) {
 
     RenderFrame(g, f, t, landed ? Scene::Landed : Scene::Curl);
     if (!CurlLayerPresent(g.layer)) {
-        Land(r, g, f, LandHow::AtOnce);
+        Land(r, g, f, LandHow::AtOnce, "Present failed");
         return false;
     }
     double presented = CurlNowMs();
@@ -777,6 +782,17 @@ static void TakeCmds(Renderer* r, Vec<Cmd>& out) {
     r->mutex.Unlock();
 }
 
+// a frame signal taken with nothing left to draw (a Curl landed at once just
+// then): give it back with a see-through frame, or the latency handle never
+// signals again and every later Curl times out
+static void ReturnFrame(Gpu& g, const Flight& f) {
+    if (!CurlLayerTarget(g.layer)) {
+        return;
+    }
+    RenderFrame(g, f, 0, Scene::Empty);
+    CurlLayerPresent(g.layer);
+}
+
 static void DrawLoop(Renderer* r, Gpu& g) {
     Flight f;
     Vec<Cmd> cmds;
@@ -784,6 +800,7 @@ static void DrawLoop(Renderer* r, Gpu& g) {
         HANDLE handles[2] = {r->wake, CurlLayerFrameWait(g.layer)};
         DWORD n = f.animating ? 2 : 1;
         DWORD res = WaitForMultipleObjects(n, handles, FALSE, f.animating ? kFrameWaitMs : kIdleWaitMs);
+        bool frameSignal = res == WAIT_OBJECT_0 + 1;
         if (!IsWindow(r->hwnd)) {
             return;
         }
@@ -795,13 +812,13 @@ static void DrawLoop(Renderer* r, Gpu& g) {
         for (const Cmd& c : cmds) {
             switch (c.kind) {
                 case CmdKind::Quit:
-                    Land(r, g, f, LandHow::AtOnce);
+                    Land(r, g, f, LandHow::AtOnce, "window closed");
                     return;
                 case CmdKind::LandAll:
-                    Land(r, g, f, LandHow::AtOnce);
+                    Land(r, g, f, LandHow::AtOnce, c.why);
                     break;
                 case CmdKind::Resize:
-                    Land(r, g, f, LandHow::AtOnce);
+                    Land(r, g, f, LandHow::AtOnce, c.why);
                     CurlLayerResize(g.layer, c.size);
                     break;
                 case CmdKind::Start:
@@ -813,11 +830,14 @@ static void DrawLoop(Renderer* r, Gpu& g) {
             }
         }
         if (!f.animating) {
+            if (frameSignal) {
+                ReturnFrame(g, f);
+            }
             continue;
         }
 
         // only a frame signal may draw: then Present doesn't block
-        if (res != WAIT_OBJECT_0 + 1) {
+        if (!frameSignal) {
             if (CurlNowMs() - f.turn.t0 > kStuckMs) {
                 Land(r, g, f, LandHow::TimedOut);
             }
@@ -1065,13 +1085,14 @@ void CurlWindowShowsNew(MainWindow* win, CurlSpread now) {
 }
 
 // lands everything at once: the layer disappears now
-void CurlLandAll(MainWindow* win) {
+void CurlLandAll(MainWindow* win, const char* why) {
     Renderer* r = FindRenderer(win);
     if (!r || !InAir(r)) {
         return;
     }
     Cmd c;
     c.kind = CmdKind::LandAll;
+    c.why = why;
     Post(r, c);
 
     // short: the layer should be gone before SumatraPDF's next paint
@@ -1085,14 +1106,14 @@ void CurlLandAll(MainWindow* win) {
     }
 }
 
-void CurlLandAllWindows() {
+void CurlLandAllWindows(const char* why) {
     // CurlLandAll may drop closed windows' renderers from gRenderers
     Vec<MainWindow*> wins;
     for (Renderer* r : gRenderers) {
         VecAppend(wins, r->win);
     }
     for (MainWindow* win : wins) {
-        CurlLandAll(win);
+        CurlLandAll(win, why);
     }
 }
 
@@ -1102,10 +1123,12 @@ void CurlResize(MainWindow* win) {
     if (!r) {
         return;
     }
-    CurlLandAll(win);
+    constexpr const char* why = "resize";
+    CurlLandAll(win, why);
     Cmd c;
     c.kind = CmdKind::Resize;
     c.size = CanvasSize(r->hwnd);
+    c.why = why;
     Post(r, c);
 }
 

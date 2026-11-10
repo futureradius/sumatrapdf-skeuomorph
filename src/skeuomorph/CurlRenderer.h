@@ -63,8 +63,9 @@ void CurlCopyOld(MainWindow* win, CurlSpread from);
 void CurlStart(MainWindow* win, const CurlTurn& turn);
 void CurlWindowShowsNew(MainWindow* win, CurlSpread now);
 
-void CurlLandAll(MainWindow* win);
-void CurlLandAllWindows();
+// why: a short reason for the debug log, e.g. "resize"; a string literal
+void CurlLandAll(MainWindow* win, const char* why);
+void CurlLandAllWindows(const char* why);
 void CurlResize(MainWindow* win);
 void CurlDestroy(MainWindow* win);
 

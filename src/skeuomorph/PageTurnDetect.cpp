@@ -184,6 +184,16 @@ static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir,
 static void LogTurn(const Turn&, Spread, Spread, int, int, int) {}
 #endif
 
+// everything in the air lands now: the layer goes and the clock forgets it,
+// so the next Curl is a whole one, not a fast tap
+static void LandEverything(WindowTurns* wt, MainWindow* win, const char* why) {
+    if (wt) {
+        Landed landed;
+        wt->clock.LandAll(&landed);
+    }
+    CurlLandAll(win, why);
+}
+
 // runs after the action's message: everything GoToPage did is in place
 static void FinishTurn(MainWindow* win) {
     WindowTurns* wt = FindTurns(win, Lookup::Find);
@@ -195,7 +205,7 @@ static void FinishTurn(MainWindow* win) {
     // the document closed or the tab changed: nothing turned in this window
     DisplayModel* dm = win->AsFixed();
     if (!dm || dm != wt->pendingDm) {
-        CurlLandAll(win);
+        LandEverything(wt, win, "document changed");
         return;
     }
 
@@ -204,7 +214,7 @@ static void FinishTurn(MainWindow* win) {
     Spread to = SpreadNow(dm);
     if (to.first == wt->from.first && to.last == wt->from.last) {
         if (wt->gate != Skip::None) {
-            CurlLandAll(win);
+            LandEverything(wt, win, "view changed");
         }
         return;
     }
@@ -213,7 +223,7 @@ static void FinishTurn(MainWindow* win) {
     Turn t = DecideTurn(wt->gate, wt->from, to, reading);
     if (t.kind == TurnKind::Nothing) {
         LogTurn(t, wt->from, to, 0, wt->clock.InAir(), 0);
-        CurlLandAll(win);
+        LandEverything(wt, win, SkipName(t.why).s);
         return;
     }
 
@@ -226,7 +236,7 @@ static void FinishTurn(MainWindow* win) {
 
     // Bundles are still instant jumps in build step 4 (they come in step 7)
     if (t.kind != TurnKind::Curl) {
-        CurlLandAll(win);
+        LandEverything(wt, win, "Bundle");
         return;
     }
     StartCurl(win, dm, t, lenMs);
@@ -254,6 +264,12 @@ void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
     wt->from = g.atHook == g.atPaint ? SpreadNow(dm) : wt->spreadAtPaint;
     wt->pendingDm = dm;
     wt->pending = true;
+
+    // the view changed since the last paint (tab switch, display mode, Manga
+    // Mode): what's in the air lands before anything is drawn
+    if (g.atHook != g.atPaint) {
+        LandEverything(wt, win, "view changed");
+    }
 
     // win->buffer still shows the old Spread; later it's gone
     if (wt->gate == Skip::None) {
@@ -285,8 +301,8 @@ void DetectAfterPaint(MainWindow* win, bool flushed) {
 // "opening". Also called when trimming margins re-lays dm out; the next
 // paint restores the fingerprint
 void DetectForget(MainWindow* win, DisplayModel* dm) {
-    CurlLandAll(win);
     WindowTurns* wt = FindTurns(win, Lookup::Find);
+    LandEverything(wt, win, "document closed");
     if (!wt) {
         return;
     }
@@ -297,4 +313,43 @@ void DetectForget(MainWindow* win, DisplayModel* dm) {
     if (wt->pendingDm == dm) {
         wt->pendingDm = nullptr;
     }
+}
+
+// hook 4, outside an action: zoom, rotation, Manga Mode, Presentation, a new
+// canvas size. Inside one (GoToPage re-lays out every Page Turn), FinishTurn
+// decides; the Curl it starts comes after, so a turn never lands its own Curl
+void DetectBeforeRelayout(MainWindow* win) {
+    WindowTurns* wt = FindTurns(win, Lookup::Find);
+    if (wt && wt->pending) {
+        return;
+    }
+    LandEverything(wt, win, "relayout");
+}
+
+// before SumatraPDF paints: the window shows another document or view than
+// the one under the Curl (tab switch, closed document, Manga Mode). Lands
+// before the paint, not after
+void DetectBeforePaint(MainWindow* win) {
+    if (!CurlInAir(win)) {
+        return;
+    }
+    WindowTurns* wt = FindTurns(win, Lookup::Find);
+    if (wt && FingerprintOf(win->AsFixed()) == wt->atPaint) {
+        return;
+    }
+    LandEverything(wt, win, "view changed");
+}
+
+// a window change (resize, minimize, DPI): see WindowChanges.cpp
+void DetectLandAll(MainWindow* win, const char* why) {
+    LandEverything(FindTurns(win, Lookup::Find), win, why);
+}
+
+// the switch turned off
+void DetectLandAllWindows(const char* why) {
+    for (WindowTurns* wt : gWindowTurns) {
+        Landed landed;
+        wt->clock.LandAll(&landed);
+    }
+    CurlLandAllWindows(why);
 }
