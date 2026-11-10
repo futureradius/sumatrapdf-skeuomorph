@@ -1130,6 +1130,11 @@ struct Settings {
     // Automatically Scroll pauses after scrolling this many minutes; 0
     // scrolls until the end of the document
     float readingAutoScrollMinutes;
+    // if true, page turns in Paged View look like turning paper
+    bool skeuomorphPageTurn;
+    // length of a normal Skeuomorph Page Turn in milliseconds; bigger is
+    // slower. 100 to 5000
+    int pageTurnDuration;
     // reading bar (View menu): a horizontal band on the page to keep your
     // place. Highlight fills the band; Invert dims everything else
     ReadingBar readingBar;

@@ -491,6 +491,7 @@ function sumatrapdf_files()
     "WebpReader.*",
     "WindowTab.*",
   })
+  files_in_dir("src/skeuomorph", { "*.cpp", "*.h" })
   filter { "configurations:Debug or DebugFull" }
   files_in_dir("src", {
     "TestPlugin.cpp",

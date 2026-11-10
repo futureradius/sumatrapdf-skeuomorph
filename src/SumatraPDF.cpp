@@ -78,6 +78,7 @@
 #include "Commands.h"
 #include "Flags.h"
 #include "AppSettings.h"
+#include "skeuomorph/PageTurnHooks.h"
 #include "AppTools.h"
 #include "Canvas.h"
 #include "RefHover.h"
@@ -12094,6 +12095,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             for (auto& w : gWindows) {
                 w->RedrawAll(true);
             }
+            break;
+
+        case CmdToggleSkeuomorphPageTurn:
+            ToggleSkeuomorphPageTurn();
             break;
 
         case CmdToggleDisableLinks:

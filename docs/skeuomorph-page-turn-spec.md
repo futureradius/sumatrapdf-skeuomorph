@@ -39,7 +39,8 @@ You don't need to read the map or the old tickets. Open one only if you need the
 
 **Code generator** (for settings and commands)
 - Needs **bun**. The human consented to the one-time install on 2026-11-10: `powershell -c "irm bun.sh/install.ps1 | iex"`. bun stays a permanent requirement.
-- Before running `bun cmd/gen-code.ts`, put MSBuild's folder on PATH, or the generator can't find clang-format: `$env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin;" + $env:PATH`.
+- Run the generator through `src\skeuomorph\run-gen-code.bat`, not plain `bun cmd/gen-code.ts`. Besides bun it needs clang-format (MSBuild's folder), `cl.exe` (`vcvars64.bat`) and vswhere (the VS Installer folder) on PATH, and the batch file sets all of them up. Found in build step 1.
+- The generator's clang-format pass also reformats an unrelated array in `src/shared/EbookDoc.cpp`. Undo that with `git checkout src/shared/EbookDoc.cpp`. It also leaves a git-ignored `cmd/tmp/` folder.
 - Never edit the generated `src/Settings.*` and `src/shared/Commands.*` by hand. After upstream merges, fix conflicts there by re-running the generator.
 
 **Done for a build step** (before the next one starts):

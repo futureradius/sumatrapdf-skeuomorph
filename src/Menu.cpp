@@ -954,6 +954,7 @@ static void MenuUpdateStateForWindow(MainWindow* win) {
     MenuSetChecked(win->menu, CmdToggleLinks, gSettings->showLinks);
     MenuSetChecked(win->menu, CmdTogglePageBoxes, win->showPageBoxes);
     MenuSetChecked(win->menu, CmdToggleHighlightFormFields, gSettings->highlightFormFields);
+    MenuSetChecked(win->menu, CmdToggleSkeuomorphPageTurn, gSettings->skeuomorphPageTurn);
     MenuSetChecked(win->menu, CmdToggleTransparencyGrid, ShowTransparencyGrid());
     MenuSetChecked(win->menu, CmdTogglePageGrid, ShowPageGrid());
     MenuSetChecked(win->menu, CmdMeasure, win->measurementToolbar != nullptr);

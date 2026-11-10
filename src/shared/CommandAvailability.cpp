@@ -1040,6 +1040,11 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         }
 #endif
     }
+#if defined(SUMATRA_NG)
+    if (cmdId == CmdToggleSkeuomorphPageTurn) {
+        return CommandVisibility::Hide;
+    }
+#endif
 
     return MapForSurface(CommandVisibility::Show, surface);
 }

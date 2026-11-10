@@ -353,6 +353,10 @@ MenuDef menuDefView[] = {
         CmdToggleHighlightFormFields,
     },
     {
+        TrN("Skeuomorph Page Turn"),
+        CmdToggleSkeuomorphPageTurn,
+    },
+    {
         TrN("Transparency Gri&d"),
         CmdToggleTransparencyGrid,
     },

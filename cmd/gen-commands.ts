@@ -382,6 +382,7 @@ const commandsRaw = [
     "CmdCloseMissingTabs", "Close Tabs of Missing Files",
     "CmdViewAsHex", "View As Hex",
     "CmdAIChatWithCustomAPI", "Custom AI chat...",
+    "CmdToggleSkeuomorphPageTurn", "Skeuomorph Page Turn",
 ];
 
 // removed slots are dropped: nothing outside the generators should see them
