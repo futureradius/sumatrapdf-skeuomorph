@@ -309,7 +309,7 @@ On `scrolling` at `1d0b75378`, "insert after" the line. "Both" means built by cl
 | 15 | Build the new folder | `premake5.files.lua:493` | classic | `files_in_dir("src/skeuomorph", ...)` | +1 | 1 |
 | | **Total** | 13 files | | | **+46, 1 changed** | |
 
-Allowed extra: unit-test registration in `src/tests/Sumatra_ut.cpp` (+2, debug only, step 2). Models to copy: the setting is like `ReadingAutoScrollSpeed`; the switch is like `HighlightFormFields` / `CmdToggleHighlightFormFields`, saved at once like `CmdToggleDisableLinks`. Read `gSettings` only in classic-only files. ([How are settings and View-menu switches added?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/7))
+Allowed extra: unit-test registration in `src/tests/Sumatra_ut.cpp` (+2, debug only, step 2). Also `SwitchToDisplayMode` in `src/SumatraPDF.cpp` (+1, step 3, approved by the human on 2026-11-10): it stops a running smooth scroll, which otherwise kept scrolling to the old Continuous target and left the view blank (an upstream bug). Models to copy: the setting is like `ReadingAutoScrollSpeed`; the switch is like `HighlightFormFields` / `CmdToggleHighlightFormFields`, saved at once like `CmdToggleDisableLinks`. Read `gSettings` only in classic-only files. ([How are settings and View-menu switches added?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/7))
 
 ### 5.3 Detecting a Page Turn
 
