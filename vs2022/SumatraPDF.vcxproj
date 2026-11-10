@@ -1612,6 +1612,7 @@
     <ClInclude Include="..\src\skeuomorph\CurlLayer.h" />
     <ClInclude Include="..\src\skeuomorph\CurlRenderer.h" />
     <ClInclude Include="..\src\skeuomorph\CurlShaders.h" />
+    <ClInclude Include="..\src\skeuomorph\FlashRecorder.h" />
     <ClInclude Include="..\src\skeuomorph\PageEdges.h" />
     <ClInclude Include="..\src\skeuomorph\PageTurnDetect.h" />
     <ClInclude Include="..\src\skeuomorph\PageTurnHooks.h" />
@@ -2489,6 +2490,7 @@
     </ClCompile>
     <ClCompile Include="..\src\skeuomorph\CurlLayer.cpp" />
     <ClCompile Include="..\src\skeuomorph\CurlRenderer.cpp" />
+    <ClCompile Include="..\src\skeuomorph\FlashRecorder.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageEdges.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageTurnDetect.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageTurnHooks.cpp" />

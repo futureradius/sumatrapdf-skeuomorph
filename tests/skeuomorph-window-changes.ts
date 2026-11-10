@@ -531,10 +531,31 @@ export async function testit(): Promise<void> {
         f = await s.waitFlight();
       }
       const got = err || flightText(f);
-      rows.push({ name: "close the document", expect: `landed at once (< ${AT_ONCE_MS} ms)`, got, ok: !err && landedAtOnce(f) });
+      rows.push({
+        name: "close the document",
+        expect: `landed at once (< ${AT_ONCE_MS} ms)`,
+        got,
+        ok: !err && landedAtOnce(f),
+      });
       await toFirstPage(s);
       await checkWholeCurl(s, "  then Page Down");
     }
+
+    // a Markdown tab: its view is a child window over the canvas, so the
+    // canvas gets no WM_PAINT; the Curl under it must land all the same
+    const md = tmpPath("skeuomorph-window-changes.md");
+    writeFileSync(md, "# Markdown tab\n\nA document that isn't a Paged View.\n");
+    if (!sendCopyDataW(frame, DDE_COPYDATA_ID, `[Open("${md}", 0, 1, 0)]`)) {
+      throw new Error("could not open the Markdown document");
+    }
+    await s.settle();
+    s.cmd("CmdPrevTab");
+    await s.settle();
+    await landsAtOnce(s, {
+      name: "Markdown tab switch",
+      change: async (ss) => ss.cmd("CmdNextTab"),
+      undo: async (ss) => ss.cmd("CmdPrevTab"),
+    });
 
     // close the window mid-Curl: the app exits, no hang
     await toFirstPage(s);
@@ -550,7 +571,12 @@ export async function testit(): Promise<void> {
 
     const log = readFileSync(logPath, "utf8");
     const stuck = log.split(/\r?\n/).filter((l) => /TIMEOUT|didn't stop|Present failed/.test(l));
-    rows.push({ name: "log", expect: "no TIMEOUT, no stuck thread", got: stuck.join(" | ") || "clean", ok: stuck.length === 0 });
+    rows.push({
+      name: "log",
+      expect: "no TIMEOUT, no stuck thread",
+      got: stuck.join(" | ") || "clean",
+      ok: stuck.length === 0,
+    });
   } finally {
     if (other) {
       await killAndWait(other);

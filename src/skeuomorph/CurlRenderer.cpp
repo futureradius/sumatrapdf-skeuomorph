@@ -4,6 +4,7 @@
 #include "base/Base.h"
 #include "base/Win.h"
 #include "base/Timer.h"
+#include "base/File.h"
 
 #include "gui/UIModels.h"
 
@@ -18,6 +19,7 @@
 #include "skeuomorph/CurlD3D.h"
 #include "skeuomorph/CurlLayer.h"
 #include "skeuomorph/ScreenCopy.h"
+#include "skeuomorph/FlashRecorder.h"
 #include "skeuomorph/CurlRenderer.h"
 #include "skeuomorph/CurlShaders.h"
 
@@ -608,12 +610,36 @@ static void Publish(Renderer* r, const Flight& f) {
     r->mutex.Unlock();
 }
 
-#if IS_DEBUG
+// SKEUOMORPH_PERF_LOG=<file>: the same line per Curl appended there, also in
+// Release builds, for the speed check (tests/skeuomorph-speed.ts)
+static Str PerfLogPath() {
+    static Str path = [] {
+        WCHAR buf[MAX_PATH];
+        DWORD n = GetEnvironmentVariableW(L"SKEUOMORPH_PERF_LOG", buf, dimof(buf));
+        return n > 0 && n < dimof(buf) ? str::Dup(ToUtf8Temp(WStr(buf))) : Str();
+    }();
+    return path;
+}
+
+static void AppendPerfLog(Str path, Str line) {
+    file::FileHandle h = file::OpenReadWrite(path, true);
+    if (h == file::kInvalidFileHandle) {
+        return;
+    }
+    file::SeekEnd(h);
+    file::WriteAll(h, line);
+    file::Close(h);
+}
+
 // one line per Curl, beside the per-turn line (another prefix, so the
 // tests/skeuomorph-*.ts parsers don't count it):
 //   skeuomorph-curl: #3 landed after 702 ms, 42 frames, 0 late, covered 12.8 ms, UI waited 12.1 ms
 //   skeuomorph-curl: #4 landed at once (resize) after 310 ms, 18 frames, ...
 static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why) {
+    Str perfPath = PerfLogPath();
+    if (!IS_DEBUG && len(perfPath) == 0) {
+        return;
+    }
     r->mutex.Lock();
     double uiWait = r->uiWaitId == f.times.id ? r->uiWaitMs : 0;
     r->mutex.Unlock();
@@ -625,12 +651,15 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
         what = fmt("landed at once (%s)", Str(why));
     }
     double covered = tm.covered > 0 ? tm.covered - tm.start : -1;
-    logf("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms\n", tm.id, what,
-         (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait);
+    TempStr line = fmt("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms\n",
+                       tm.id, what, (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait);
+    if (IS_DEBUG) {
+        logf("%s", line);
+    }
+    if (len(perfPath) > 0) {
+        AppendPerfLog(perfPath, line);
+    }
 }
-#else
-static void LogFlight(Renderer*, const Flight&, LandHow, const char*) {}
-#endif
 
 // the layer goes now; tell a waiting UI thread. why: for the log, landed at once
 static void Land(Renderer* r, Gpu& g, Flight& f, LandHow how, const char* why = "") {
@@ -681,6 +710,10 @@ static void StartFlight(Renderer* r, Gpu& g, Flight& f, const TurnData& turn) {
     }
 
     // the next Curl must never fly this one's old Spread
+    // test of the test (FlashRecorder): the first frame comes late
+    if (int lagMs = FlashLayerLagMs()) {
+        Sleep((DWORD)lagMs);
+    }
     std::swap(g.pics[kSlotOld], g.pics[kSlotNextOld]);
     g.pics[kSlotNextOld].ok = false;
     f = Flight();
@@ -1045,7 +1078,7 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     // ADR 0005: SumatraPDF repaints only once the Curl covers the screen,
     // or the new Spread would flash for a frame now and then
     int id = t.id;
-    while (true) {
+    while (!FlashSkipsCoverWait()) {
         int left = kCoverWaitMs - (int)(CurlNowMs() - t.t0);
         if (left <= 0) {
             break;

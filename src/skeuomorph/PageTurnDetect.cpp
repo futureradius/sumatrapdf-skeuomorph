@@ -18,6 +18,7 @@
 #include "skeuomorph/PageTurnLogic.h"
 #include "skeuomorph/PageTurnHooks.h"
 #include "skeuomorph/CurlRenderer.h"
+#include "skeuomorph/FlashRecorder.h"
 #include "skeuomorph/PageTurnDetect.h"
 
 using namespace pageturn;
@@ -240,6 +241,7 @@ static void FinishTurn(MainWindow* win) {
         return;
     }
     StartCurl(win, dm, t, lenMs);
+    FlashCurlStarted(win);
 }
 
 void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
@@ -247,6 +249,8 @@ void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
     if (!wt || wt->pending) {
         return;
     }
+
+    FlashTap(win);
 
     TurnGate g;
     g.switchOn = gSettings->skeuomorphPageTurn;
@@ -284,6 +288,7 @@ void DetectAfterPaint(MainWindow* win, bool flushed) {
     // the Curl layer is set up at the first Paged View paint with the switch on
     if (dm && gSettings->skeuomorphPageTurn && !IsContinuous(dm->GetDisplayMode())) {
         CurlEnsure(win);
+        FlashWatch(win);
     }
     if (!flushed) {
         return;

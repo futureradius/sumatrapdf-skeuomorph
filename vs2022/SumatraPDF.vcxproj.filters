@@ -720,6 +720,9 @@
     <ClInclude Include="..\src\skeuomorph\CurlShaders.h">
       <Filter>src\skeuomorph</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\skeuomorph\FlashRecorder.h">
+      <Filter>src\skeuomorph</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\skeuomorph\PageEdges.h">
       <Filter>src\skeuomorph</Filter>
     </ClInclude>
@@ -1695,6 +1698,9 @@
       <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\skeuomorph\CurlRenderer.cpp">
+      <Filter>src\skeuomorph</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\FlashRecorder.cpp">
       <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\skeuomorph\PageEdges.cpp">
