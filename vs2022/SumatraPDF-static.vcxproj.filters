@@ -708,7 +708,13 @@
     <ClInclude Include="..\src\shared\gui\UIModels.h">
       <Filter>src\shared\gui</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\skeuomorph\PageTurnDetect.h">
+      <Filter>src\skeuomorph</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\skeuomorph\PageTurnHooks.h">
+      <Filter>src\skeuomorph</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\skeuomorph\PageTurnLogic.h">
       <Filter>src\skeuomorph</Filter>
     </ClInclude>
     <ClInclude Include="..\src\uia\DocumentProvider.h">
@@ -1661,7 +1667,16 @@
     <ClCompile Include="..\src\shared\tests\TextSelection_ut.cpp">
       <Filter>src\shared\tests</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\PageTurnDetect.cpp">
+      <Filter>src\skeuomorph</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\skeuomorph\PageTurnHooks.cpp">
+      <Filter>src\skeuomorph</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\PageTurnLogic.cpp">
+      <Filter>src\skeuomorph</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\PageTurnLogic_ut.cpp">
       <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\tests\Sumatra_ut.cpp">

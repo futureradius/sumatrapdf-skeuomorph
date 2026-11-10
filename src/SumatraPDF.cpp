@@ -965,6 +965,8 @@ struct ControllerCallbackHandler : DocControllerCallback {
     void FindAllResultReceived(Str payload) override { BrowserFindAllResultReceived(win, payload); }
     void TocChanged(DocController* ctrl) override;
     void PagesRenumbered(DisplayModel* dm) override;
+    void BeforeSpreadChange(DisplayModel* dm, int pageNo) override { PageTurnBeforeSpread(win, dm, pageNo); }
+    void BeforeRelayout(DisplayModel* dm) override { PageTurnBeforeRelayout(win, dm); }
 };
 
 void ControllerCallbackHandler::TocChanged(DocController* ctrl) {
@@ -1078,6 +1080,7 @@ void ControllerCallbackHandler::RequestPredictiveRendering(DisplayModel* dm, int
 void ControllerCallbackHandler::CleanUp(DisplayModel* dm) {
     gRenderCache->CancelRenderingBlocking(dm);
     gRenderCache->FreeForDisplayModel(dm);
+    PageTurnForget(win, dm);
 }
 
 // ~DisplayModel waits for in-flight renders (CleanUp -> CancelRenderingBlocking)

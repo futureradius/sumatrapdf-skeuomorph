@@ -2952,6 +2952,7 @@ void DisplayModel::GoToPage(int pageNo, int scrollY, bool addNavPt, int scrollX)
     if (!IsContinuous(GetDisplayMode())) {
         /* in single page mode going to another page involves recalculating
            the size of canvas */
+        cb->BeforeSpreadChange(this, pageNo);
         ChangeStartPage(pageNo);
     } else if (IsFitContentZoom(zoomVirtual)) {
         // make sure that CalcZoomReal uses the correct page to calculate

@@ -130,6 +130,7 @@ bool Accelerators_UnitTestCreateAnnotEdit();
 bool Accelerators_UnitTestCustomShortcutShown();
 bool AnnotSearch_UnitTests();
 void ReadAloudHighlight_UnitTests();
+void PageTurnLogic_UnitTests();
 bool RenderCache_UnitTestCookieUnlocked();
 bool RenderCache_UnitTestFullOfOneVisiblePage();
 bool RenderCache_UnitTestFullOfOldZoom();
@@ -668,6 +669,7 @@ int RunAppUnitTests(bool forAi) {
     utassert(DocController_UnitTestDestroyHook());
     utassert(Commands_UnitTestIdLimit());
     ReadAloudHighlight_UnitTests();
+    PageTurnLogic_UnitTests();
 #endif
     return utassert_print_results();
 }

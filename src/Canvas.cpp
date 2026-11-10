@@ -76,6 +76,7 @@
 #include "HexView.h"
 #include "PageGridDialogCommon.h"
 #include "MeasurementToolbar.h"
+#include "skeuomorph/PageTurnHooks.h"
 #include "SumatraLog.h"
 
 // if set instead of trying to render pages we don't have, we simply do nothing
@@ -3324,6 +3325,7 @@ static void OnPaintDocument(MainWindow* win) {
         if (!gNoFlickerRender || shouldPaint || showFocus) {
             win->buffer->Flush(hdc);
         }
+        PageTurnAfterPaint(win, !gNoFlickerRender || shouldPaint || showFocus);
     }
     DrawCanvasKeyboardFocusIfNeeded(win, hdc);
 
