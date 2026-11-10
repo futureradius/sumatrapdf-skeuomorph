@@ -6,14 +6,17 @@
 #include "Settings.h"
 #include "AppSettings.h"
 
+#include "skeuomorph/PageTurnLogic.h"
 #include "skeuomorph/PageTurnDetect.h"
 #include "skeuomorph/PageEdges.h"
+#include "skeuomorph/CurlRenderer.h"
 #include "skeuomorph/PageTurnHooks.h"
 
 // View / Skeuomorph Page Turn; saved at once so it survives a crash
 void ToggleSkeuomorphPageTurn() {
     gSettings->skeuomorphPageTurn = !gSettings->skeuomorphPageTurn;
     ScheduleSaveSettings();
+    CurlLandAllWindows();
     EdgesRelayoutAll();
 }
 

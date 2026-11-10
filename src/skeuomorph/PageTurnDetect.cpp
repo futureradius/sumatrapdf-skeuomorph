@@ -12,10 +12,12 @@
 #include "DocController.h"
 #include "EngineBase.h"
 #include "DisplayModel.h"
+#include "Theme.h"
 #include "MainWindow.h"
 
 #include "skeuomorph/PageTurnLogic.h"
 #include "skeuomorph/PageTurnHooks.h"
+#include "skeuomorph/CurlRenderer.h"
 #include "skeuomorph/PageTurnDetect.h"
 
 using namespace pageturn;
@@ -23,10 +25,13 @@ using namespace pageturn;
 // One action (key, wheel notch, command) = one Page Turn:
 //
 //   message --> GoToPage --> hook 3: first call of the action:
-//           |                        gate, old Spread, Post(FinishTurn)
+//           |                        gate, old Spread, Post(FinishTurn);
+//           |                        gate passed: copy the old Spread
 //           +-> GoToPage --> hook 3: ignored, same action
-//   FinishTurn (posted, runs after the message): final Spread -> DecideTurn
-//   WM_PAINT --> hook 6: fingerprint of what the reader now sees
+//   FinishTurn (posted, runs after the message): final Spread -> DecideTurn;
+//           a Curl: start it, wait until it covers the screen
+//   WM_PAINT --> hook 6: fingerprint of what the reader now sees;
+//           flushed: the Curl layer may go see-through
 
 struct WindowTurns {
     MainWindow* win = nullptr;
@@ -101,6 +106,51 @@ static Spread SpreadNow(DisplayModel* dm) {
     return {dm->FirstPageInRow(p), dm->LastPageInRow(p)};
 }
 
+// the Spread's pages as on screen, canvas px; a lone page in Facing or Book
+// View goes to its side of the spine
+static CurlSpread SpreadOnScreen(DisplayModel* dm) {
+    CurlSpread s;
+    if (!dm || !dm->pagesInfo) {
+        return s;
+    }
+    Rect shown[2];
+    int n = 0;
+    for (int p = 1; p <= dm->PageCount() && n < 2; p++) {
+        PageInfo* pi = dm->GetPageInfo(p);
+        if (!pi || !pi->isShown || pi->visibleRatio <= 0 || pi->pageOnScreen.IsEmpty()) {
+            continue;
+        }
+        shown[n++] = pi->pageOnScreen;
+    }
+    if (n == 0) {
+        return s;
+    }
+    if (IsSingle(dm->GetDisplayMode())) {
+        s.left = shown[0];
+        return s;
+    }
+    if (n == 2) {
+        bool inOrder = shown[0].x <= shown[1].x;
+        s.left = inOrder ? shown[0] : shown[1];
+        s.right = inOrder ? shown[1] : shown[0];
+        return s;
+    }
+    Rect r = shown[0];
+    bool rightOfSpine = r.x + r.dx / 2 >= dm->GetViewPort().dx / 2;
+    (rightOfSpine ? s.right : s.left) = r;
+    return s;
+}
+
+static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, int lenMs) {
+    CurlTurn c;
+    c.shape = IsSingle(dm->GetDisplayMode()) ? CurlShape::Single : CurlShape::Spread;
+    c.sweep = t.sweep;
+    c.durationMs = lenMs;
+    c.to = SpreadOnScreen(dm);
+    ThemePageRenderColors(c.paper);
+    CurlStart(win, c);
+}
+
 static bool IsHidden(MainWindow* win) {
     HWND hwnd = win->hwndFrame;
     return IsIconic(hwnd) || !IsWindowVisible(hwnd);
@@ -145,12 +195,17 @@ static void FinishTurn(MainWindow* win) {
     // the document closed or the tab changed: nothing turned in this window
     DisplayModel* dm = win->AsFixed();
     if (!dm || dm != wt->pendingDm) {
+        CurlLandAll(win);
         return;
     }
 
-    // zoom, resize, restore: the Spread stayed, not a page change
+    // zoom, resize, restore: the Spread stayed, not a page change. A Curl in
+    // the air lands if the view changed under it; a mere scroll keeps it
     Spread to = SpreadNow(dm);
     if (to.first == wt->from.first && to.last == wt->from.last) {
+        if (wt->gate != Skip::None) {
+            CurlLandAll(win);
+        }
         return;
     }
 
@@ -158,6 +213,7 @@ static void FinishTurn(MainWindow* win) {
     Turn t = DecideTurn(wt->gate, wt->from, to, reading);
     if (t.kind == TurnKind::Nothing) {
         LogTurn(t, wt->from, to, 0, wt->clock.InAir(), 0);
+        CurlLandAll(win);
         return;
     }
 
@@ -165,7 +221,15 @@ static void FinishTurn(MainWindow* win) {
     Landed landed;
     wt->clock.SetDuration(PageTurnDurationMs());
     wt->clock.Start(now, t.kind, &landed);
-    LogTurn(t, wt->from, to, wt->clock.LengthMs(t.kind, now), wt->clock.InAir(), landed.n);
+    int lenMs = wt->clock.LengthMs(t.kind, now);
+    LogTurn(t, wt->from, to, lenMs, wt->clock.InAir(), landed.n);
+
+    // Bundles are still instant jumps in build step 4 (they come in step 7)
+    if (t.kind != TurnKind::Curl) {
+        CurlLandAll(win);
+        return;
+    }
+    StartCurl(win, dm, t, lenMs);
 }
 
 void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
@@ -177,8 +241,7 @@ void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
     TurnGate g;
     g.switchOn = gSettings->skeuomorphPageTurn;
     g.pagedView = !IsContinuous(dm->GetDisplayMode());
-    // no Curl layer before build step 4
-    g.layerLoaded = true;
+    g.layerLoaded = CurlIsLoaded(win);
     g.syncing = dm->syncingWithEngineLayout;
     g.stepsOnePage = dm->StepsOnePage();
     g.hidden = IsHidden(win);
@@ -191,11 +254,21 @@ void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
     wt->from = g.atHook == g.atPaint ? SpreadNow(dm) : wt->spreadAtPaint;
     wt->pendingDm = dm;
     wt->pending = true;
+
+    // win->buffer still shows the old Spread; later it's gone
+    if (wt->gate == Skip::None) {
+        CurlCopyOld(win, SpreadOnScreen(dm));
+    }
     uitask::Post(MkFunc0<MainWindow>(FinishTurn, win), "PageTurnFinish");
 }
 
 // an unflushed paint left the old screen up: keep the old fingerprint
 void DetectAfterPaint(MainWindow* win, bool flushed) {
+    DisplayModel* dm = win->AsFixed();
+    // the Curl layer is set up at the first Paged View paint with the switch on
+    if (dm && gSettings->skeuomorphPageTurn && !IsContinuous(dm->GetDisplayMode())) {
+        CurlEnsure(win);
+    }
     if (!flushed) {
         return;
     }
@@ -203,15 +276,16 @@ void DetectAfterPaint(MainWindow* win, bool flushed) {
     if (!wt) {
         return;
     }
-    DisplayModel* dm = win->AsFixed();
     wt->atPaint = FingerprintOf(dm);
     wt->spreadAtPaint = dm && dm->pagesInfo ? SpreadNow(dm) : Spread{};
+    CurlWindowShowsNew(win, SpreadOnScreen(dm));
 }
 
 // a dead dm's address can come back for the next document; it must read as
 // "opening". Also called when trimming margins re-lays dm out; the next
 // paint restores the fingerprint
 void DetectForget(MainWindow* win, DisplayModel* dm) {
+    CurlLandAll(win);
     WindowTurns* wt = FindTurns(win, Lookup::Find);
     if (!wt) {
         return;
