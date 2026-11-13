@@ -104,7 +104,8 @@ struct Consts {
     float shadowOff[2];
     float shadowAlpha;
     float shading;
-    float pad[2];
+    float backdropX; // kModeBackdrop: a column of plain background; < 0: none
+    float pad;
 };
 static_assert(sizeof(Consts) == 160, "matches cbuffer CB, in 16 byte rows");
 
@@ -112,7 +113,8 @@ enum Mode {
     kModeFlat = 0,
     kModeCurl = 1,
     kModePaper = 2,
-    kModeShadow = 3
+    kModeShadow = 3,
+    kModeBackdrop = 4
 };
 
 // everything a Curl needs, copied into the drawing thread
@@ -430,9 +432,6 @@ struct Geometry {
     Rect revealed;      // new page uncovered as the sheet lifts: blank paper until SumatraPDF shows it
     Rect landing;       // landed: the landing page's copy; empty: nothing
     Rect paperBelow[2]; // where the sheet's shadow may fall: paper, never background
-    // Single Page: a bigger new page's parts outside the old page keep the old
-    // screen, fading with the old page forward, covered by the landing one backward
-    Rect beyond[4];
 };
 
 static Rect MirrorRect(Rect r, float spineX) {
@@ -514,7 +513,6 @@ static Geometry SingleGeometry(const TurnData& t) {
     bool toLeft = t.sweep != Sweep::ToRight;
     g.dirX = toLeft ? 1.0f : -1.0f;
     g.revealed = t.to.left;
-    Outside(g.revealed, t.from.left, g.beyond);
     if (t.forward) {
         g.start = t.from.left;
         g.spineX = (float)(toLeft ? g.start.x : g.start.Right());
@@ -533,7 +531,7 @@ static Geometry SingleGeometry(const TurnData& t) {
     g.fade = Fade::In;
     g.stays = t.from.left;
     g.landing = t.to.left;
-    g.paperBelow[0] = g.stays;
+    g.paperBelow[0] = g.stays.Intersect(g.landing);
     return g;
 }
 
@@ -672,6 +670,19 @@ static void DrawFlat(Gpu& g, const TurnData& t, Rect r, const CurlPicture& pic, 
     Draw(g, c, &pic, nullptr, false);
 }
 
+// plain background over r, as the old screen had it at the same height
+static void DrawBackdrop(Gpu& g, const TurnData& t, Rect r, const CurlPicture& pic, float x, float alpha) {
+    if (r.IsEmpty() || alpha <= 0) {
+        return;
+    }
+    Consts c = BaseConsts(g, t, r);
+    c.mode = kModeBackdrop;
+    c.alpha = alpha;
+    c.backdropX = x;
+    SetPicture(c.frontImg, pic);
+    Draw(g, c, &pic, nullptr, false);
+}
+
 static void DrawPaper(Gpu& g, const TurnData& t, Rect r) {
     if (r.IsEmpty()) {
         return;
@@ -775,6 +786,69 @@ static void DrawSheet(Gpu& g, const Flight& f, float t) {
     Draw(g, c, front, back, true);
 }
 
+// a column of plain background in the old screen: the middle of the margin
+// beside the old page and its Page Edges; -1: none on screen
+static float BackdropX(const TurnData& t) {
+    Rect page = t.from.left;
+    int left = page.x - t.edgesPx;
+    if (left >= 1) {
+        return (float)(left / 2);
+    }
+    int right = page.Right() + t.edgesPx;
+    if (right < t.canvas.dx) {
+        return (float)((right + t.canvas.dx) / 2);
+    }
+    return -1;
+}
+
+// Single Page, all but the turning sheet. Pages of different sizes put the new
+// page and its Page Edges elsewhere than the old: what's around the old page
+// (background, Page Edges, a wider page's sides) stays as it was, then changes
+// to the new screen while the sheet settles, the last part of the turn
+// (spec 3.3: the forward sheet fades away then; backward it lands):
+//
+//   forward:  old page = the sheet; under it the new page (blank paper until
+//             SumatraPDF shows it) and, beyond the new page, background;
+//             around the old page, the old screen, fading as the sheet does
+//   backward: the old page under the incoming sheet, where the new page will
+//             lie; the new page's parts beyond it, background until the sheet
+//             covers them; everything else, the old screen, fading out
+static void DrawSingleAround(Gpu& g, const Flight& f, float t) {
+    const TurnData& turn = f.turn;
+    const CurlPicture& old = g.pics[kSlotOld];
+    Rect oldPage = turn.from.left;
+    Rect newPage = turn.to.left;
+    Size view = CurlLayerSize(g.layer);
+    Rect canvas(0, 0, view.dx, view.dy);
+    float settle = SheetAlpha(Fade::Out, t); // 1 until the sheet settles, then 0
+    float x = BackdropX(turn);
+    Rect parts[4];
+    if (turn.forward) {
+        if (!f.seeThrough) {
+            DrawPaper(g, turn, newPage);
+        }
+        Outside(oldPage, newPage, parts);
+        for (Rect r : parts) {
+            DrawBackdrop(g, turn, r, old, x, settle);
+        }
+        Outside(canvas, oldPage, parts);
+        for (Rect r : parts) {
+            DrawFlat(g, turn, r, old, settle);
+        }
+        return;
+    }
+    Rect under = newPage.Intersect(oldPage);
+    DrawFlat(g, turn, under, old);
+    Outside(newPage, oldPage, parts);
+    for (Rect r : parts) {
+        DrawBackdrop(g, turn, r, old, x, 1);
+    }
+    Outside(canvas, under, parts);
+    for (Rect r : parts) {
+        DrawFlat(g, turn, r, old, settle);
+    }
+}
+
 // Uncovered parts are blank paper until SumatraPDF shows the new Spread, then
 // see-through. Landed: the landing page is the copy of what's beneath, so the
 // last frame matches SumatraPDF's own picture
@@ -802,17 +876,17 @@ static void RenderFrame(Gpu& g, const Flight& f, float t, Scene scene) {
     g.ctx->PSSetConstantBuffers(0, 1, g.consts.GetAddressOf());
     g.ctx->PSSetSamplers(0, 1, g.samp.GetAddressOf());
 
-    // Single Page backward: the old page lies on the revealed one
     const Geometry& geo = f.geo;
+    if (scene == Scene::Curl && f.turn.shape == CurlShape::Single) {
+        DrawSingleAround(g, f, t);
+        DrawSheet(g, f, t);
+        return;
+    }
     if (!f.seeThrough) {
         DrawPaper(g, f.turn, geo.revealed);
     }
     if (scene == Scene::Curl) {
         DrawFlat(g, f.turn, geo.stays, g.pics[kSlotOld]);
-        float beyondAlpha = geo.fade == Fade::Out ? SheetAlpha(geo.fade, t) : 1;
-        for (Rect r : geo.beyond) {
-            DrawFlat(g, f.turn, r, g.pics[kSlotOld], beyondAlpha);
-        }
         DrawSheet(g, f, t);
         return;
     }
@@ -877,6 +951,14 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
     double covered = tm.covered > 0 ? tm.covered - tm.start : -1;
     TempStr line = fmt("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms\n",
                        tm.id, what, (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait);
+    if (IS_DEBUG) {
+        // where the Spreads were, canvas px, for tests/skeuomorph-curl-look.ts:
+        //   skeuomorph-rects: #3 from 10,20,300,400 to 5,20,310,400 edges 12
+        Rect o = UnionOf(f.turn.from.left, f.turn.from.right);
+        Rect n = UnionOf(f.turn.to.left, f.turn.to.right);
+        logf("skeuomorph-rects: #%d from %d,%d,%d,%d to %d,%d,%d,%d edges %d\n", tm.id, o.x, o.y, o.dx, o.dy, n.x, n.y,
+             n.dx, n.dy, f.turn.edgesPx);
+    }
     if (IS_DEBUG) {
         logf("%s", line);
     }

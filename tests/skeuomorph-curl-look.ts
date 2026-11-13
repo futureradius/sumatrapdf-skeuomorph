@@ -6,11 +6,16 @@
 //   - the Curl plays to its end ("landed", not "landed at once");
 //   - the frame at 75% differs from the screen before and after the turn: the
 //     layer shows something in between;
+//   - outside the new Spread, the frame at 95% is almost the screen after:
+//     nothing pops when the layer goes (a wide page's sides vanishing at the
+//     end, say). The landing page itself may still be settling;
+//   - Single Page: the old page's Page Edges and the new page's never show
+//     both at full strength (pages of different sizes put them elsewhere);
 // and stepping through mixed page sizes at Fit Width, a turn that shows or hides
 // a scrollbar keeps its Curl (it used to land as a "resize").
 //
 // Screen captures of every turn land in tests/tmp/skeuomorph-curl-look/ to look at:
-// <scenario>-<n>-before.png, -30.png, -50.png, -75.png, -after.png.
+// <scenario>-<n>-before.png, -10.png ... -95.png, -after.png.
 // The window is put on top for the run: the captures read the real screen.
 // Uses the test shelf (C:\code\test-shelf), read only.
 //
@@ -50,19 +55,27 @@ const SWP_NOMOVE = 0x2;
 const SWP_NOSIZE = 0x1;
 
 const CURL_MS = 3000;
-const SHOTS = [0.3, 0.5, 0.75];
+const SHOTS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.85, 0.95];
 const SETTLE_MS = 600;
 const LAND_WAIT_MS = CURL_MS + 4000;
 // the 75% frame differs from before and after in at least this share of pixels (%)
-const CHECK_FROM = 0.75;
+const CHECK_AT = 0.75;
 const MIN_CHANGE = 1;
 const CHANGED = 32;
+// outside the new Spread, the 95% frame differs from after in at most this
+// share of the canvas's pixels (%)
+const POP_AT = 0.95;
+const POP_MAX = 0.5;
+// Page Edges at full strength: this share of their changing pixels match a screen
+const FULL = 0.9;
+const MIN_EDGE_PX = 100;
 
 const GWL_STYLE = -16;
 const WS_SCROLLBARS = 0x00300000; // WS_VSCROLL | WS_HSCROLL
 
 const TURN_PREFIX = "skeuomorph: ";
 const CURL_PREFIX = "skeuomorph-curl: ";
+const RECTS_PREFIX = "skeuomorph-rects: ";
 
 const OUT = tmpPath("skeuomorph-curl-look");
 
@@ -96,19 +109,81 @@ function setTopmost(hwnd: number, on: boolean): void {
   user32.symbols.SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 }
 
-// share of pixels (%) whose colour changed clearly
-function change(a: Uint8Array | null, b: Uint8Array | null): number {
+// share of pixels (%) whose colour changed clearly; outside `skip` only
+function change(a: Uint8Array | null, b: Uint8Array | null, w = 0, skip: Box | null = null): number {
   if (!a || !b || a.length !== b.length) {
     return 0;
   }
   let changed = 0;
   for (let i = 0; i < a.length; i += 4) {
+    if (skip) {
+      const x = (i / 4) % w;
+      const y = Math.floor(i / 4 / w);
+      if (x >= skip.x && x < skip.x + skip.dx && y >= skip.y && y < skip.y + skip.dy) {
+        continue;
+      }
+    }
     const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]));
     if (d > CHANGED) {
       changed++;
     }
   }
   return (100 * changed) / (a.length / 4);
+}
+
+// canvas px
+type Box = { x: number; y: number; dx: number; dy: number };
+
+// "#3 from 10,20,300,400 to 5,20,310,400 edges 12"
+function parseRects(line: string): { from: Box; to: Box; edges: number } | null {
+  const m = /from (-?\d+),(-?\d+),(\d+),(\d+) to (-?\d+),(-?\d+),(\d+),(\d+) edges (\d+)/.exec(line);
+  if (!m) {
+    return null;
+  }
+  const n = m.slice(1).map(Number);
+  const box = (i: number) => ({ x: n[i], y: n[i + 1], dx: n[i + 2], dy: n[i + 3] });
+  return { from: box(0), to: box(4), edges: n[8] };
+}
+
+// the room for Page Edges on both sides of a page
+function edgeRoom(page: Box, edges: number): Box[] {
+  return [
+    { x: page.x - edges, y: page.y, dx: edges, dy: page.dy },
+    { x: page.x + page.dx, y: page.y, dx: edges, dy: page.dy },
+  ];
+}
+
+function differ(a: Uint8Array, b: Uint8Array, i: number): boolean {
+  return Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2])) > CHANGED;
+}
+
+// in boxes, the pixels that differ between screens `shows` and `other`: the
+// share of them where frame matches `shows`, and how many there are
+function shownShare(
+  frame: Uint8Array,
+  shows: Uint8Array,
+  other: Uint8Array,
+  boxes: Box[],
+  w: number,
+): { share: number; px: number } {
+  const h = frame.length / 4 / w;
+  let px = 0;
+  let match = 0;
+  for (const b of boxes) {
+    for (let y = Math.max(0, b.y); y < Math.min(h, b.y + b.dy); y++) {
+      for (let x = Math.max(0, b.x); x < Math.min(w, b.x + b.dx); x++) {
+        const i = (y * w + x) * 4;
+        if (!differ(shows, other, i)) {
+          continue;
+        }
+        px++;
+        if (!differ(frame, shows, i)) {
+          match++;
+        }
+      }
+    }
+  }
+  return { share: px > 0 ? match / px : 0, px };
 }
 
 type Scenario = {
@@ -201,6 +276,44 @@ class Run {
   }
 }
 
+// Single Page: no frame shows the old page's Page Edges and the new page's both
+// at full strength
+function checkEdges(
+  tag: string,
+  rectsLine: string,
+  before: Uint8Array | null,
+  after: Uint8Array | null,
+  mid: (Uint8Array | null)[],
+  area: Rect,
+  fails: string[],
+): void {
+  const rects = parseRects(rectsLine);
+  if (!rects) {
+    fails.push(`${tag}: no page rects in the log: ${rectsLine}`);
+    return;
+  }
+  const w = area.right - area.left;
+  if (!before || !after || before.length !== after.length) {
+    return;
+  }
+  const oldRoom = edgeRoom(rects.from, rects.edges);
+  const newRoom = edgeRoom(rects.to, rects.edges);
+  for (let i = 0; i < mid.length; i++) {
+    const frame = mid[i];
+    if (!frame || frame.length !== before.length) {
+      continue;
+    }
+    const o = shownShare(frame, before, after, oldRoom, w);
+    const n = shownShare(frame, after, before, newRoom, w);
+    if (o.px >= MIN_EDGE_PX && n.px >= MIN_EDGE_PX && o.share >= FULL && n.share >= FULL) {
+      const at = Math.round(SHOTS[i] * 100);
+      fails.push(
+        `${tag} at ${at}%: old and new Page Edges both at full strength (${(100 * o.share).toFixed(0)}% / ${(100 * n.share).toFixed(0)}%)`,
+      );
+    }
+  }
+}
+
 async function runScenario(s: Scenario, fails: string[]): Promise<void> {
   const appdata = tmpPath(`skeuomorph-curl-look-${s.name}-appdata`);
   rmSync(appdata, { recursive: true, force: true });
@@ -261,10 +374,22 @@ async function runScenario(s: Scenario, fails: string[]): Promise<void> {
       if (!/ landed after /.test(landed)) {
         fails.push(`${tag}: the Curl didn't play to its end: ${landed}`);
       }
-      // earlier frames are for looking: only a corner has lifted at 30%, and in
+      // other frames are for looking: only a corner has lifted at 30%, and in
       // Single Page backward the page is still fading in beside its edge
       for (let i = 0; i < mid.length; i++) {
-        if (SHOTS[i] < CHECK_FROM) {
+        if (SHOTS[i] === POP_AT) {
+          const rects = parseRects(r.lines(RECTS_PREFIX).at(-1) ?? "");
+          if (!rects) {
+            fails.push(`${tag}: no Spread rects in the log`);
+            continue;
+          }
+          const pop = change(mid[i], after, area.right - area.left, rects.to);
+          console.log(`    at 95%: ${pop.toFixed(2)}% differs from after`);
+          if (pop > POP_MAX) {
+            fails.push(`${tag}: pops at the end: ${pop.toFixed(2)}% of the 95% frame differs from after`);
+          }
+        }
+        if (SHOTS[i] !== CHECK_AT) {
           continue;
         }
         const fromBefore = change(mid[i], before);
@@ -275,6 +400,9 @@ async function runScenario(s: Scenario, fails: string[]): Promise<void> {
             `${tag} at ${at}%: no Curl on screen (changed ${fromBefore.toFixed(2)}% / ${fromAfter.toFixed(2)}%)`,
           );
         }
+      }
+      if (s.view === "single page") {
+        checkEdges(tag, r.lines(RECTS_PREFIX).at(-1) ?? "", before, after, mid, area, fails);
       }
     }
 

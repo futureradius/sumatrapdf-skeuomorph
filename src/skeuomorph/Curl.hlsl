@@ -6,6 +6,7 @@
 // mode 1: the sheet, wrapped over a cylinder lying on it (corner peel, spec 3.3)
 // mode 2: blank paper over rect
 // mode 3: the sheet's shadow, flattened onto the paper below
+// mode 4: background over rect: texFront's column backdropX, at the same height
 //
 // The sheet lies flat on the start side of the spine before the turn and on
 // the other side after it, mirrored. Its outline changes from startRect to
@@ -32,7 +33,8 @@ cbuffer CB : register(b0) {
     float2 shadowOff;
     float shadowAlpha;
     float shading;
-    float2 pad;
+    float backdropX; // mode 4: a column of plain background in texFront; < 0: none
+    float pad;
 };
 Texture2D texFront : register(t0);
 Texture2D texBack : register(t1);
@@ -137,7 +139,7 @@ VSOut VS(float2 uv : TEXCOORD0) {
     o.atEnd = 0;
     o.height = 0;
     o.reach = 1;
-    if (mode == 0 || mode == 2) {
+    if (mode == 0 || mode == 2 || mode == 4) {
         o.world = float3(rect.xy + uv * rect.zw, 0);
         o.pos = Project(o.world);
         return o;
@@ -189,6 +191,13 @@ float4 PS(VSOut i) : SV_Target {
     }
     if (mode == 2) {
         return float4(paper.rgb * alpha, alpha);
+    }
+    if (mode == 4) {
+        float2 c = float2(backdropX, i.pos.y);
+        if (backdropX < 0 || !Inside(c, frontImg)) {
+            return float4(paper.rgb * alpha, alpha);
+        }
+        return float4(texFront.Load(int3(c - frontImg.xy, 0)).rgb * alpha, alpha);
     }
     if (mode == 3) {
         // soft and faint near the page, fading as the paper rises
