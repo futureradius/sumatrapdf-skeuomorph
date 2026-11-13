@@ -10,3 +10,4 @@ void EdgesBeforeSpread(DisplayModel* dm, int pageNo);
 void EdgesForget(DisplayModel* dm);
 void EdgesRelayoutAll();
 void EdgesPaint(HDC hdc, DisplayModel* dm);
+int EdgesRoomOnScreen(DisplayModel* dm);

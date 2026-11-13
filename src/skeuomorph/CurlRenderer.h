@@ -17,7 +17,8 @@
 struct MainWindow;
 
 // a Spread as on screen, canvas pixels. Single Page uses left only; a lone
-// page in Facing or Book View sits on its side of the spine
+// page in Facing or Book View sits on its side of the spine; a wide page
+// alone across both columns is split at its middle
 struct CurlSpread {
     Rect left;
     Rect right;
@@ -31,9 +32,11 @@ enum class CurlShape {
 struct CurlTurn {
     CurlShape shape = CurlShape::Spread;
     pageturn::Sweep sweep = pageturn::Sweep::ToLeft;
+    bool forward = true;
     int durationMs = 0;
     CurlSpread to;   // the new Spread, as laid out now
     Color paper = 0; // blank paper: the theme's page colour
+    int edgesPx = 0; // room for Page Edges beside the Spread
 };
 
 // times of the last Curl, ms on CurlNowMs()'s clock; 0 = didn't happen

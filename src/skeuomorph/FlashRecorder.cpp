@@ -38,8 +38,9 @@
 //     skeuomorph-flash: #4 FLASH (flicker 61% for 3 frames at 17 ms), Curl #4, ...
 //
 // A flash is any of:
-//   flicker     pixels leave a picture and come back within 6 frames: the new
-//               Spread (or background, a blank page) showed before the Curl covered it
+//   flicker     soon after the tap, pixels leave a picture and come back within
+//               6 frames: the new Spread (or background, a blank page) showed
+//               before the Curl covered it
 //   old back    the old Spread comes back after the Curl started covering it
 //   new early   most of the new Spread shows in the first 40% of the Curl
 //   neither     a frame shows mostly neither the old nor the new Spread
@@ -59,6 +60,11 @@ constexpr UINT kPollMs = 50;
 constexpr int kSame = 24;
 constexpr int kDiffers = 48;
 constexpr int kMaxBlipFrames = 6;
+// a flicker starts this soon after the tap, before the Curl covers the screen
+// (ADR 0005: at most ~35 ms at 4K). Later, a fast Curl's own shadow and
+// shading pass over pixels within kMaxBlipFrames; the old Spread coming back
+// and gaps at the end have their own checks
+constexpr double kFlickerWindowMs = 150;
 constexpr double kFlickerShare = 0.08; // of the canvas
 constexpr double kMinMaskShare = 0.02; // old and new must differ this much to judge
 constexpr double kStartedBelow = 0.98;
@@ -492,10 +498,14 @@ struct Verdict {
     int missed = 0;
 };
 
-// pixels that leave frame k's colour at k+1 and come back within kMaxBlipFrames
-static void ScoreFlicker(const TurnFrames& f, FrameScore* sc, int* maxLen) {
+// pixels that leave frame k's colour at k+1 and come back within kMaxBlipFrames,
+// for k + 1 shown within kFlickerWindowMs of the tap
+static void ScoreFlicker(const TurnFrames& f, double tapMs, FrameScore* sc, int* maxLen) {
     int nPx = f.thumb.dx * f.thumb.dy;
     for (int k = 0; k + 2 < f.n; k++) {
+        if (f.info[k + 1].t - tapMs > kFlickerWindowMs) {
+            break;
+        }
         const u8* a = FramePx(f, k);
         const u8* b = FramePx(f, k + 1);
         for (int p = 0; p < nPx; p++) {
@@ -556,7 +566,7 @@ static Verdict Judge(const TurnJob& job, const TurnFrames& f, FrameScore* sc) {
     for (int k = 0; k < f.n; k++) {
         v.missed += f.info[k].missed;
     }
-    ScoreFlicker(f, sc, &v.flickerLen);
+    ScoreFlicker(f, job.tapMs, sc, &v.flickerLen);
     for (int k = 0; k < f.n; k++) {
         if (sc[k].flickerPx > v.flickerPx) {
             v.flickerPx = sc[k].flickerPx;

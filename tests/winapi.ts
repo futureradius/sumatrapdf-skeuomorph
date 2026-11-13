@@ -1991,6 +1991,51 @@ export function captureWindowDCToPng(hwnd: number, outPath: string): boolean {
   return status === 0;
 }
 
+// Capture part of the screen (screen px): what the reader sees, including
+// DirectComposition layers that window DCs and PrintWindow miss. Returns BGRA
+// bytes, top-down; also saved as a PNG when pngPath is given. The area must be
+// on screen and uncovered.
+export function captureScreenRect(r: Rect, pngPath?: string): Uint8Array | null {
+  const w = r.right - r.left;
+  const h = r.bottom - r.top;
+  if (w <= 0 || h <= 0) {
+    return null;
+  }
+  const screenDC = user32.symbols.GetWindowDC(0);
+  const memDC = gdi32.symbols.CreateCompatibleDC(screenDC);
+  const bmi = new ArrayBuffer(40);
+  const dv = new DataView(bmi);
+  dv.setUint32(0, 40, true);
+  dv.setInt32(4, w, true);
+  dv.setInt32(8, -h, true);
+  dv.setUint16(12, 1, true);
+  dv.setUint16(14, 32, true);
+  const bitsPtr = new BigUint64Array(1);
+  const bmp = gdi32.symbols.CreateDIBSection(memDC, ptr(bmi), 0, ptr(bitsPtr), 0n, 0);
+  if (!bmp || !bitsPtr[0]) {
+    gdi32.symbols.DeleteDC(memDC);
+    user32.symbols.ReleaseDC(0, screenDC);
+    return null;
+  }
+  const oldObj = gdi32.symbols.SelectObject(memDC, bmp);
+  const copied = gdi32.symbols.BitBlt(memDC, 0, 0, w, h, screenDC, r.left, r.top, SRCCOPY);
+  gdi32.symbols.SelectObject(memDC, oldObj);
+
+  const bits = Number(bitsPtr[0]) as unknown as Parameters<typeof toArrayBuffer>[0];
+  const data = copied ? new Uint8Array(toArrayBuffer(bits, 0, w * h * 4)).slice() : null;
+  if (data && pngPath) {
+    ensureGdiplus();
+    const gpBmp = new BigUint64Array(1);
+    gdiplus.symbols.GdipCreateBitmapFromHBITMAP(bmp, 0n, ptr(gpBmp));
+    gdiplus.symbols.GdipSaveImageToFile(gpBmp[0], ptr(wideZ(pngPath)), ptr(PNG_ENCODER_CLSID), 0);
+    gdiplus.symbols.GdipDisposeImage(gpBmp[0]);
+  }
+  gdi32.symbols.DeleteObject(bmp);
+  gdi32.symbols.DeleteDC(memDC);
+  user32.symbols.ReleaseDC(0, screenDC);
+  return data;
+}
+
 // Like captureWindowDCToPng but only a sub-rect (window-relative, so 0,0 is the
 // top-left of the NON-client area), optionally magnified `zoom` times with
 // nearest-neighbour so thin things like a scrollbar are legible in the PNG.

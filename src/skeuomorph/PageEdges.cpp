@@ -90,6 +90,11 @@ static int RoomOnScreen(DisplayModel* dm) {
     return ScaleByDpi(RoomPx(dm->PageCount(), LayoutOf(dm)), dm->uiDpi);
 }
 
+// for the Curl layer, which keeps the old Page Edges until the sheet lands
+int EdgesRoomOnScreen(DisplayModel* dm) {
+    return RoomOnScreen(dm);
+}
+
 // sets the room to px; a document that never had room keeps its margin
 // untouched, so the switch off is exactly the original
 static void SetRoom(DisplayModel* dm, int px) {

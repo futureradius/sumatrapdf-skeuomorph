@@ -55,11 +55,24 @@ constexpr int kSeeThroughRefreshes = 1;
 // a frame is late when its gap is over 1.5 refreshes
 constexpr double kLateFactor = 1.5;
 
-// the plain cylinder of build step 4 (spec 3.3); corner lead and shadow come later
+// the corner peel (spec 3.3), as in the prototype
 constexpr float kPi = 3.14159265f;
 constexpr float kRadiusPerWidth = 0.17f;
 constexpr float kShrinkFrom = 0.6f; // the radius shrinks to 0 over the last 40%
-constexpr float kSingleFadeFrom = 0.7f;
+constexpr float kMinRadius = 0.01f;
+constexpr float kLeadDeg = 35;
+constexpr float kLeadPow = 1.5f;
+constexpr float kShadow = 0.3f;
+constexpr float kShading = 0.3f;
+constexpr float kDepth = 0.7f;
+// prototype: camera = max(view height, 1.2 x sheet reach) x (14 - 12.6 x depth), ~5.2 x
+constexpr float kCamPerHeight = 14 - 12.6f * kDepth;
+constexpr float kCamPerReach = 1.2f;
+// the shadow is 8 faint copies in a ring: a soft edge
+constexpr int kShadowCopies = 8;
+constexpr float kShadowPerCopy = 0.16f;
+// Single Page: once over, the page fades away
+constexpr float kSingleFadeFrom = 0.55f;
 constexpr int kGridX = 48;
 constexpr int kGridY = 64;
 
@@ -74,26 +87,32 @@ enum Slot {
 // matches cbuffer CB in Curl.hlsl
 struct Consts {
     float viewSize[2];
-    float pagePos[2];
-    float pageSize[2];
-    float foldPoint[2];
-    float foldNormal[2];
-    float radius;
     float mode;
-    float frontImg[4];
-    float backImg[4];
-    float mirrorX2;
-    float backY;
-    float backScaleY;
     float alpha;
     float paper[4];
+    float rect[4];
+    float frontImg[4];
+    float backImg[4];
+    float startRect[4];
+    float endRect[4];
+    float spineX;
+    float dirX;
+    float progress;
+    float lead;
+    float radius;
+    float camDist;
+    float shadowOff[2];
+    float shadowAlpha;
+    float shading;
+    float pad[2];
 };
-static_assert(sizeof(Consts) % 16 == 0, "constant buffers come in 16 byte rows");
+static_assert(sizeof(Consts) == 160, "matches cbuffer CB, in 16 byte rows");
 
 enum Mode {
     kModeFlat = 0,
     kModeCurl = 1,
-    kModePaper = 2
+    kModePaper = 2,
+    kModeShadow = 3
 };
 
 // everything a Curl needs, copied into the drawing thread
@@ -102,10 +121,12 @@ struct TurnData {
     double t0 = 0;
     CurlShape shape = CurlShape::Spread;
     Sweep sweep = Sweep::ToLeft;
+    bool forward = true;
     int durationMs = 0;
     CurlSpread from;
     CurlSpread to;
     Color paper = 0;
+    int edgesPx = 0;
     Size canvas;
 };
 
@@ -158,6 +179,7 @@ struct Renderer {
     bool haveFrom = false;
     CurlShape shape = CurlShape::Spread;
     Sweep sweep = Sweep::ToLeft;
+    bool forward = true;
 };
 
 static Vec<Renderer*> gRenderers;
@@ -203,7 +225,9 @@ struct Gpu {
     ComPtr<ID3D11SamplerState> samp;
     ComPtr<ID3D11BlendState> blend;
     ComPtr<ID3D11RasterizerState> rast;
+    ComPtr<ID3D11RasterizerState> rastClipped; // shadows: only on paper
     ComPtr<ID3D11DepthStencilState> depth;
+    ComPtr<ID3D11DepthStencilState> noDepth;
     CurlPicture pics[kSlotCount];
 };
 
@@ -329,12 +353,21 @@ static bool MakePipeline(Gpu& g) {
     if (FAILED(dev->CreateRasterizerState(&rd, &g.rast))) {
         return false;
     }
+    rd.ScissorEnable = TRUE;
+    if (FAILED(dev->CreateRasterizerState(&rd, &g.rastClipped))) {
+        return false;
+    }
 
     D3D11_DEPTH_STENCIL_DESC ds{};
     ds.DepthEnable = TRUE;
     ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     ds.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-    return SUCCEEDED(dev->CreateDepthStencilState(&ds, &g.depth));
+    if (FAILED(dev->CreateDepthStencilState(&ds, &g.depth))) {
+        return false;
+    }
+    ds.DepthEnable = FALSE;
+    ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    return SUCCEEDED(dev->CreateDepthStencilState(&ds, &g.noDepth));
 }
 
 static TempStr AdapterNameTemp(Gpu& g) {
@@ -365,37 +398,154 @@ static bool Setup(Renderer* r, Gpu& g, bool* warp, const char** why) {
 
 //--- drawing thread: one Curl
 
-// where the pieces of a Curl are, canvas px
-struct Geometry {
-    Rect sheet;         // old page that turns over: front old page, back landing page
-    Rect stays;         // landing side: the old screen until the sheet covers it
-    Rect landing;       // new page the sheet lands on; empty in Single Page
-    Rect revealed;      // new page uncovered as the sheet lifts
-    float mirrorX2 = 0; // twice the spine's x: the sheet lands mirrored around it
+// what the turning sheet shows on a face
+enum class Face {
+    Paper,   // blank paper
+    Old,     // the old Spread's copy
+    Landing, // the landing page's copy, once SumatraPDF shows it
 };
 
-static Geometry GeometryOf(const TurnData& t) {
+enum class Fade {
+    None,
+    Out, // Single Page forward: once over, the page fades away
+    In,  // Single Page backward: the page comes back from where it faded
+};
+
+// where the pieces of a Curl are, canvas px. The sheet lies flat at start,
+// turns over the spine and lies flat at end, mirrored:
+//
+//   Facing forward         Single Page forward    Single Page backward
+//   [land][sheet]          |[sheet]               [start]|[end]
+//    end <- start           end <-| start                |  old page under it
+//         spine                 spine (left edge)      spine (left edge)
+struct Geometry {
+    Rect start;
+    Rect end;
+    Face startFace = Face::Old;
+    Face endFace = Face::Landing;
+    float spineX = 0;
+    float dirX = 1; // +1: start is right of the spine
+    Fade fade = Fade::None;
+    Rect stays;         // the old screen, until the sheet covers it
+    Rect revealed;      // new page uncovered as the sheet lifts: blank paper until SumatraPDF shows it
+    Rect landing;       // landed: the landing page's copy; empty: nothing
+    Rect paperBelow[2]; // where the sheet's shadow may fall: paper, never background
+};
+
+static Rect MirrorRect(Rect r, float spineX) {
+    r.x = (int)lroundf(2 * spineX) - r.Right();
+    return r;
+}
+
+// the old screen beside the landing page keeps its Page Edges until the sheet
+// lands, so they change when the paper does
+static Rect WithEdges(Rect r, int edgesPx, Sweep sweep) {
+    if (r.IsEmpty() || edgesPx <= 0) {
+        return r;
+    }
+    r.dx += edgesPx;
+    if (sweep != Sweep::ToRight) {
+        r.x -= edgesPx;
+    }
+    return r;
+}
+
+// halfway between the start side's page and the end side's, at their inner
+// edges; with one of them, at its inner edge
+static float SpineX(Rect startSide, Rect endSide, bool toLeft) {
+    float startEdge = (float)(toLeft ? startSide.x : startSide.Right());
+    float endEdge = (float)(toLeft ? endSide.Right() : endSide.x);
+    if (startSide.IsEmpty()) {
+        return endEdge;
+    }
+    if (endSide.IsEmpty()) {
+        return startEdge;
+    }
+    return (startEdge + endEdge) / 2;
+}
+
+// the part of r on the end side: the old screen there must not cover the
+// turning page, nor the start side once that page lifts. Pages of different
+// sizes can reach past the spine
+static Rect EndSide(Rect r, float spineX, Rect fromLead, bool toLeft) {
+    if (r.IsEmpty()) {
+        return r;
+    }
+    int spine = toLeft ? (int)floorf(spineX) : (int)ceilf(spineX);
+    if (!fromLead.IsEmpty()) {
+        spine = toLeft ? std::min(spine, fromLead.x) : std::max(spine, fromLead.Right());
+    }
+    if (toLeft && r.Right() > spine) {
+        r.dx = std::max(0, spine - r.x);
+    } else if (!toLeft && r.x < spine) {
+        r.dx = std::max(0, r.Right() - spine);
+        r.x = spine;
+    }
+    return r;
+}
+
+// Single Page: the page turns over its own edge (left, or right in
+// Right-to-Left Reading); its back is blank paper. A backward turn plays the
+// same Curl mirrored: the page comes back over that edge onto the old one
+static Geometry SingleGeometry(const TurnData& t) {
     Geometry g;
     bool toLeft = t.sweep != Sweep::ToRight;
-    if (t.shape == CurlShape::Single) {
-        // the page turns over its own edge, its back is blank paper
-        g.sheet = t.from.left;
-        g.revealed = t.to.left;
-        g.mirrorX2 = toLeft ? 2.0f * g.sheet.x : 2.0f * g.sheet.Right();
+    g.dirX = toLeft ? 1.0f : -1.0f;
+    g.revealed = t.to.left;
+    if (t.forward) {
+        g.start = t.from.left;
+        g.spineX = (float)(toLeft ? g.start.x : g.start.Right());
+        g.end = MirrorRect(g.start, g.spineX);
+        g.startFace = Face::Old;
+        g.endFace = Face::Paper;
+        g.fade = Fade::Out;
+        g.paperBelow[0] = g.revealed;
         return g;
     }
+    g.end = t.to.left;
+    g.spineX = (float)(toLeft ? g.end.Right() : g.end.x);
+    g.start = MirrorRect(g.end, g.spineX);
+    g.startFace = Face::Paper;
+    g.endFace = Face::Landing;
+    g.fade = Fade::In;
+    g.stays = t.from.left;
+    g.landing = t.to.left;
+    g.paperBelow[0] = g.stays;
+    return g;
+}
 
-    // forward in Facing: the right page curls over to the left
+static Geometry GeometryOf(const TurnData& t) {
+    if (t.shape == CurlShape::Single) {
+        return SingleGeometry(t);
+    }
+
+    // forward in Facing: the right page curls over to the left; the back of
+    // the turning page is the new Spread's first page
+    Geometry g;
+    bool toLeft = t.sweep != Sweep::ToRight;
+    g.dirX = toLeft ? 1.0f : -1.0f;
     Rect fromLead = toLeft ? t.from.right : t.from.left;
     Rect fromStay = toLeft ? t.from.left : t.from.right;
-    g.sheet = fromLead.IsEmpty() ? fromStay : fromLead;
     g.landing = toLeft ? t.to.left : t.to.right;
     g.revealed = toLeft ? t.to.right : t.to.left;
-    g.stays = UnionOf(fromLead.IsEmpty() ? Rect() : fromStay, g.landing);
+    g.spineX = SpineX(fromLead.IsEmpty() ? g.revealed : fromLead, g.landing.IsEmpty() ? fromStay : g.landing, toLeft);
+    g.stays = EndSide(WithEdges(UnionOf(fromStay, g.landing), t.edgesPx, t.sweep), g.spineX, fromLead, toLeft);
+    g.paperBelow[0] = fromStay;
+    g.paperBelow[1] = g.revealed;
+
+    // a side with no page (beside a wide page): like Single Page, a blank
+    // sheet fades in there, or fades away once over
+    g.start = fromLead;
+    if (fromLead.IsEmpty()) {
+        g.start = g.landing.IsEmpty() ? Rect() : MirrorRect(g.landing, g.spineX);
+        g.startFace = Face::Paper;
+        g.fade = Fade::In;
+    }
+    g.end = g.landing;
     if (g.landing.IsEmpty()) {
-        g.mirrorX2 = toLeft ? 2.0f * g.sheet.x : 2.0f * g.sheet.Right();
-    } else {
-        g.mirrorX2 = toLeft ? (float)(g.landing.Right() + g.sheet.x) : (float)(g.sheet.Right() + g.landing.x);
+        g.end = MirrorRect(g.start, g.spineX);
+        g.endFace = Face::Paper;
+        g.fade = Fade::Out;
     }
     return g;
 }
@@ -458,16 +608,14 @@ static void SetPicture(float* dst, const CurlPicture& pic) {
     SetRect4(dst, pic.area);
 }
 
-static Consts BaseConsts(Gpu& g, const TurnData& t, Rect page) {
+static Consts BaseConsts(Gpu& g, const TurnData& t, Rect r) {
     Consts c{};
     Size view = CurlLayerSize(g.layer);
     c.viewSize[0] = (float)view.dx;
     c.viewSize[1] = (float)view.dy;
-    c.pagePos[0] = (float)page.x;
-    c.pagePos[1] = (float)page.y;
-    c.pageSize[0] = (float)page.dx;
-    c.pageSize[1] = (float)page.dy;
+    SetRect4(c.rect, r);
     c.radius = 1;
+    c.camDist = 1; // flat pieces lie on the page plane: no perspective
     c.alpha = 1;
     c.paper[0] = GetRed(t.paper) / 255.0f;
     c.paper[1] = GetGreen(t.paper) / 255.0f;
@@ -509,49 +657,98 @@ static void DrawPaper(Gpu& g, const TurnData& t, Rect r) {
     Draw(g, c, nullptr, nullptr, false);
 }
 
-// the cylinder: the fold sweeps from the free edge past the spine while the
-// radius shrinks, so the sheet lands flat and mirrored on the other side
-static void DrawSheet(Gpu& g, const Flight& f, float t) {
-    const Geometry& geo = f.geo;
-    if (geo.sheet.IsEmpty()) {
+static float Lerp(float a, float b, float f) {
+    return a + (b - a) * f;
+}
+
+static float SmoothStep(float a, float b, float x) {
+    x = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return x * x * (3 - 2 * x);
+}
+
+static float SheetAlpha(Fade fade, float t) {
+    if (fade == Fade::Out) {
+        return 1 - SmoothStep(kSingleFadeFrom, 1, t);
+    }
+    if (fade == Fade::In) {
+        return 1 - SmoothStep(kSingleFadeFrom, 1, 1 - t);
+    }
+    return 1;
+}
+
+// the picture a face shows, or null for blank paper
+static const CurlPicture* FacePicture(Gpu& g, const Flight& f, Face face) {
+    if (face == Face::Old) {
+        return &g.pics[kSlotOld];
+    }
+    if (face == Face::Landing && f.haveLanding) {
+        return &g.pics[kSlotLanding];
+    }
+    return nullptr;
+}
+
+// the shadow of the lifted paper, on the paper below only
+static void DrawShadow(Gpu& g, const Flight& f, Consts c) {
+    if (c.shadowAlpha <= 0) {
         return;
     }
-    float w = (float)geo.sheet.dx;
+    Size view = CurlLayerSize(g.layer);
+    Rect viewRect(0, 0, view.dx, view.dy);
+    c.mode = kModeShadow;
+    g.ctx->RSSetState(g.rastClipped.Get());
+    g.ctx->OMSetDepthStencilState(g.noDepth.Get(), 0);
+    for (Rect below : f.geo.paperBelow) {
+        below = below.Intersect(viewRect);
+        if (below.IsEmpty()) {
+            continue;
+        }
+        D3D11_RECT sc = {below.x, below.y, below.Right(), below.Bottom()};
+        g.ctx->RSSetScissorRects(1, &sc);
+        for (int k = 0; k < kShadowCopies; k++) {
+            float a = 2 * kPi * k / kShadowCopies;
+            c.shadowOff[0] = cosf(a);
+            c.shadowOff[1] = sinf(a);
+            Draw(g, c, nullptr, nullptr, true);
+        }
+    }
+    g.ctx->RSSetState(g.rast.Get());
+    g.ctx->OMSetDepthStencilState(g.depth.Get(), 0);
+}
+
+// the corner peel: the fold line starts through the outer bottom corner,
+// slanted, and straightens as it sweeps to the spine; the cylinder shrinks
+// over the last 40%, so the sheet lands flat on the other side
+static void DrawSheet(Gpu& g, const Flight& f, float t) {
+    const Geometry& geo = f.geo;
+    if (geo.start.IsEmpty() || geo.end.IsEmpty()) {
+        return;
+    }
     float p = 0.5f - 0.5f * cosf(kPi * t);
-    float radius = kRadiusPerWidth * w;
-    if (t > kShrinkFrom) {
-        radius *= (1 - t) / (1 - kShrinkFrom);
-    }
-    radius = std::max(radius, 1.0f);
+    float w = Lerp((float)geo.start.dx, (float)geo.end.dx, p);
+    float h = Lerp((float)geo.start.dy, (float)geo.end.dy, p);
+    float gapStart = geo.dirX > 0 ? geo.start.x - geo.spineX : geo.spineX - geo.start.Right();
+    float reach = gapStart + w;
 
-    // in sheet px; mirrored for a sweep to the right
-    bool toLeft = f.turn.sweep != Sweep::ToRight;
-    float spine = geo.mirrorX2 / 2;
-    float halfGap = toLeft ? geo.sheet.x - spine : spine - geo.sheet.Right();
-    float startX = w + 1;
-    float endX = -halfGap - kPi * radius / 2;
-    float x = startX + (endX - startX) * p;
-
-    Consts c = BaseConsts(g, f.turn, geo.sheet);
+    Consts c = BaseConsts(g, f.turn, Rect());
     c.mode = kModeCurl;
-    c.foldPoint[0] = toLeft ? x : w - x;
-    c.foldNormal[0] = toLeft ? 1.0f : -1.0f;
-    c.radius = radius;
-    const CurlPicture& front = g.pics[kSlotOld];
-    SetPicture(c.frontImg, front);
-    const CurlPicture* back = nullptr;
-    if (f.haveLanding && !geo.landing.IsEmpty()) {
-        back = &g.pics[kSlotLanding];
-        SetPicture(c.backImg, *back);
-        c.mirrorX2 = geo.mirrorX2;
-        c.backY = (float)geo.landing.y;
-        c.backScaleY = (float)geo.landing.dy / std::max(geo.sheet.dy, 1);
-    }
-    // Single Page: once over, the page fades away
-    if (f.turn.shape == CurlShape::Single && t > kSingleFadeFrom) {
-        c.alpha = std::max(0.0f, 1 - (t - kSingleFadeFrom) / (1 - kSingleFadeFrom));
-    }
-    Draw(g, c, &front, back, true);
+    SetRect4(c.startRect, geo.start);
+    SetRect4(c.endRect, geo.end);
+    c.spineX = geo.spineX;
+    c.dirX = geo.dirX;
+    c.progress = p;
+    c.lead = kLeadDeg * kPi / 180 * powf(1 - p, kLeadPow);
+    c.radius = kRadiusPerWidth * std::min(w, h) * (1 - SmoothStep(kShrinkFrom, 1, p)) + kMinRadius;
+    c.camDist = std::max(c.viewSize[1], kCamPerReach * reach) * kCamPerHeight;
+    c.shading = kShading;
+    c.alpha = SheetAlpha(geo.fade, t);
+    c.shadowAlpha = kShadow * kShadowPerCopy * c.alpha;
+
+    const CurlPicture* front = FacePicture(g, f, geo.startFace);
+    const CurlPicture* back = FacePicture(g, f, geo.endFace);
+    SetPicture(c.frontImg, front ? *front : CurlPicture());
+    SetPicture(c.backImg, back ? *back : CurlPicture());
+    DrawShadow(g, f, c);
+    Draw(g, c, front, back, true);
 }
 
 // Uncovered parts are blank paper until SumatraPDF shows the new Spread, then
@@ -581,14 +778,13 @@ static void RenderFrame(Gpu& g, const Flight& f, float t, Scene scene) {
     g.ctx->PSSetConstantBuffers(0, 1, g.consts.GetAddressOf());
     g.ctx->PSSetSamplers(0, 1, g.samp.GetAddressOf());
 
+    // Single Page backward: the old page lies on the revealed one
     const Geometry& geo = f.geo;
-    if (scene == Scene::Curl) {
-        DrawFlat(g, f.turn, geo.stays, g.pics[kSlotOld]);
-    }
     if (!f.seeThrough) {
         DrawPaper(g, f.turn, geo.revealed);
     }
     if (scene == Scene::Curl) {
+        DrawFlat(g, f.turn, geo.stays, g.pics[kSlotOld]);
         DrawSheet(g, f, t);
         return;
     }
@@ -1032,19 +1228,18 @@ bool CurlInAir(MainWindow* win) {
     return r && InAir(r);
 }
 
-// hook 3: win->buffer still holds the last painted frame. The whole width of
-// the canvas, so a side with no page (the cover) has its background too
+// hook 3: win->buffer still holds the last painted frame. The whole canvas,
+// so a side with no page (the cover) has its background too, and so does a
+// taller landing page (pages of different sizes)
 void CurlCopyOld(MainWindow* win, CurlSpread from) {
     Renderer* r = FindRenderer(win);
     if (!r || !IsLoaded(r)) {
         return;
     }
-    Rect area = UnionOf(from.left, from.right);
-    if (area.IsEmpty()) {
+    if (UnionOf(from.left, from.right).IsEmpty()) {
         return;
     }
-    area.x = 0;
-    area.dx = ScreenCopySize(win).dx;
+    Rect area(Point(), ScreenCopySize(win));
     ScreenCopyAsk(r->desk, win, area, kSlotNextOld);
     r->from = from;
     r->haveFrom = true;
@@ -1058,6 +1253,7 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     r->haveFrom = false;
     r->shape = turn.shape;
     r->sweep = turn.sweep;
+    r->forward = turn.forward;
 
     Cmd c;
     c.kind = CmdKind::Start;
@@ -1065,10 +1261,12 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     t.t0 = CurlNowMs();
     t.shape = turn.shape;
     t.sweep = turn.sweep;
+    t.forward = turn.forward;
     t.durationMs = turn.durationMs;
     t.from = r->from;
     t.to = turn.to;
     t.paper = turn.paper;
+    t.edgesPx = turn.edgesPx;
     t.canvas = ScreenCopySize(win);
     r->mutex.Lock();
     t.id = ++r->started;
@@ -1106,9 +1304,12 @@ void CurlWindowShowsNew(MainWindow* win, CurlSpread now) {
     if (!r || !IsLoaded(r) || !InAir(r)) {
         return;
     }
+    // Single Page: only a backward turn lands a page
     Rect landing;
     if (r->shape == CurlShape::Spread) {
         landing = r->sweep == Sweep::ToRight ? now.right : now.left;
+    } else if (!r->forward) {
+        landing = now.left;
     }
     Cmd c;
     c.kind = CmdKind::ShowsNew;

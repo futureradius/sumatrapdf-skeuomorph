@@ -17,6 +17,7 @@
 
 #include "skeuomorph/PageTurnLogic.h"
 #include "skeuomorph/PageTurnHooks.h"
+#include "skeuomorph/PageEdges.h"
 #include "skeuomorph/CurlRenderer.h"
 #include "skeuomorph/FlashRecorder.h"
 #include "skeuomorph/PageTurnDetect.h"
@@ -107,6 +108,19 @@ static Spread SpreadNow(DisplayModel* dm) {
     return {dm->FirstPageInRow(p), dm->LastPageInRow(p)};
 }
 
+// a wide page alone across both columns ("landscape as spread": comics,
+// image folders)
+static bool IsWideAlone(DisplayModel* dm, int pageNo) {
+    if (pageNo < 1 || !dm->ShouldTreatLandscapeAsSpread()) {
+        return false;
+    }
+    if (dm->FirstPageInRow(pageNo) != dm->LastPageInRow(pageNo)) {
+        return false;
+    }
+    // FirstPageInRow filled the flags
+    return pageNo <= len(dm->spreadFlags) && dm->spreadFlags[pageNo - 1] != 0;
+}
+
 // the Spread's pages as on screen, canvas px; a lone page in Facing or Book
 // View goes to its side of the spine
 static CurlSpread SpreadOnScreen(DisplayModel* dm) {
@@ -115,12 +129,14 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
         return s;
     }
     Rect shown[2];
+    int shownNo = 0;
     int n = 0;
     for (int p = 1; p <= dm->PageCount() && n < 2; p++) {
         PageInfo* pi = dm->GetPageInfo(p);
         if (!pi || !pi->isShown || pi->visibleRatio <= 0 || pi->pageOnScreen.IsEmpty()) {
             continue;
         }
+        shownNo = p;
         shown[n++] = pi->pageOnScreen;
     }
     if (n == 0) {
@@ -136,7 +152,14 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
         s.right = inOrder ? shown[1] : shown[0];
         return s;
     }
+    // a picture printed across the spine: Curls fold it there, half per side
     Rect r = shown[0];
+    if (IsWideAlone(dm, shownNo)) {
+        int half = r.dx / 2;
+        s.left = Rect(r.x, r.y, half, r.dy);
+        s.right = Rect(r.x + half, r.y, r.dx - half, r.dy);
+        return s;
+    }
     bool rightOfSpine = r.x + r.dx / 2 >= dm->GetViewPort().dx / 2;
     (rightOfSpine ? s.right : s.left) = r;
     return s;
@@ -146,8 +169,10 @@ static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, int lenM
     CurlTurn c;
     c.shape = IsSingle(dm->GetDisplayMode()) ? CurlShape::Single : CurlShape::Spread;
     c.sweep = t.sweep;
+    c.forward = t.forward;
     c.durationMs = lenMs;
     c.to = SpreadOnScreen(dm);
+    c.edgesPx = EdgesRoomOnScreen(dm);
     ThemePageRenderColors(c.paper);
     CurlStart(win, c);
 }
