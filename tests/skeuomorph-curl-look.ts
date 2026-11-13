@@ -128,6 +128,14 @@ const SCENARIOS: Scenario[] = [
   { name: "book-cover", file: BOOK, view: "book view", page: 1, keys: [VK_NEXT, VK_PRIOR] },
   { name: "single", file: BOOK, view: "single page", page: 5, keys: [VK_NEXT, VK_PRIOR] },
   { name: "mixed", file: MIXED, view: "facing", page: 1, keys: [VK_NEXT, VK_NEXT, VK_NEXT, VK_PRIOR] },
+  // a bigger page's parts beyond the old one keep the old screen until the turn brings them
+  {
+    name: "mixed-single",
+    file: MIXED,
+    view: "single page",
+    page: 1,
+    keys: [VK_NEXT, VK_NEXT, VK_NEXT, VK_PRIOR, VK_PRIOR, VK_PRIOR],
+  },
   // pages 5 alone, 6 a spread, 7-8: into and out of a wide page, right to left
   { name: "comic-rtl", file: COMIC, view: "facing", page: 5, manga: true, keys: [VK_NEXT, VK_NEXT, VK_PRIOR] },
   { name: "single-rtl", file: COMIC, view: "single page", page: 3, manga: true, keys: [VK_NEXT, VK_PRIOR] },

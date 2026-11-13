@@ -183,9 +183,9 @@ float4 PS(VSOut i) : SV_Target {
     if (mode == 0) {
         float2 c = i.pos.xy;
         if (!Inside(c, frontImg)) {
-            return float4(paper.rgb, 1);
+            return float4(paper.rgb * alpha, alpha);
         }
-        return float4(texFront.Load(int3(c - frontImg.xy, 0)).rgb, 1);
+        return float4(texFront.Load(int3(c - frontImg.xy, 0)).rgb * alpha, alpha);
     }
     if (mode == 2) {
         return float4(paper.rgb * alpha, alpha);

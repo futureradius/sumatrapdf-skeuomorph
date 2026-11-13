@@ -430,6 +430,9 @@ struct Geometry {
     Rect revealed;      // new page uncovered as the sheet lifts: blank paper until SumatraPDF shows it
     Rect landing;       // landed: the landing page's copy; empty: nothing
     Rect paperBelow[2]; // where the sheet's shadow may fall: paper, never background
+    // Single Page: a bigger new page's parts outside the old page keep the old
+    // screen, fading with the old page forward, covered by the landing one backward
+    Rect beyond[4];
 };
 
 static Rect MirrorRect(Rect r, float spineX) {
@@ -484,6 +487,25 @@ static Rect EndSide(Rect r, float spineX, Rect fromLead, bool toLeft) {
     return r;
 }
 
+// the parts of r outside hole: up to 4, the rest empty
+static void Outside(Rect r, Rect hole, Rect (&out)[4]) {
+    for (Rect& o : out) {
+        o = Rect();
+    }
+    if (r.IsEmpty()) {
+        return;
+    }
+    Rect h = r.Intersect(hole);
+    if (h.IsEmpty()) {
+        out[0] = r;
+        return;
+    }
+    out[0] = Rect(r.x, r.y, r.dx, h.y - r.y);
+    out[1] = Rect(r.x, h.Bottom(), r.dx, r.Bottom() - h.Bottom());
+    out[2] = Rect(r.x, h.y, h.x - r.x, h.dy);
+    out[3] = Rect(h.Right(), h.y, r.Right() - h.Right(), h.dy);
+}
+
 // Single Page: the page turns over its own edge (left, or right in
 // Right-to-Left Reading); its back is blank paper. A backward turn plays the
 // same Curl mirrored: the page comes back over that edge onto the old one
@@ -492,6 +514,7 @@ static Geometry SingleGeometry(const TurnData& t) {
     bool toLeft = t.sweep != Sweep::ToRight;
     g.dirX = toLeft ? 1.0f : -1.0f;
     g.revealed = t.to.left;
+    Outside(g.revealed, t.from.left, g.beyond);
     if (t.forward) {
         g.start = t.from.left;
         g.spineX = (float)(toLeft ? g.start.x : g.start.Right());
@@ -499,7 +522,7 @@ static Geometry SingleGeometry(const TurnData& t) {
         g.startFace = Face::Old;
         g.endFace = Face::Paper;
         g.fade = Fade::Out;
-        g.paperBelow[0] = g.revealed;
+        g.paperBelow[0] = g.revealed.Intersect(t.from.left);
         return g;
     }
     g.end = t.to.left;
@@ -637,13 +660,14 @@ static void Draw(Gpu& g, const Consts& c, const CurlPicture* front, const CurlPi
     g.ctx->DrawIndexed(mesh ? g.meshCount : g.quadCount, 0, 0);
 }
 
-// a flat, pixel-exact piece of a screen copy
-static void DrawFlat(Gpu& g, const TurnData& t, Rect r, const CurlPicture& pic) {
-    if (r.IsEmpty()) {
+// a flat, pixel-exact piece of a screen copy; see-through by 1 - alpha
+static void DrawFlat(Gpu& g, const TurnData& t, Rect r, const CurlPicture& pic, float alpha = 1) {
+    if (r.IsEmpty() || alpha <= 0) {
         return;
     }
     Consts c = BaseConsts(g, t, r);
     c.mode = kModeFlat;
+    c.alpha = alpha;
     SetPicture(c.frontImg, pic);
     Draw(g, c, &pic, nullptr, false);
 }
@@ -785,6 +809,10 @@ static void RenderFrame(Gpu& g, const Flight& f, float t, Scene scene) {
     }
     if (scene == Scene::Curl) {
         DrawFlat(g, f.turn, geo.stays, g.pics[kSlotOld]);
+        float beyondAlpha = geo.fade == Fade::Out ? SheetAlpha(geo.fade, t) : 1;
+        for (Rect r : geo.beyond) {
+            DrawFlat(g, f.turn, r, g.pics[kSlotOld], beyondAlpha);
+        }
         DrawSheet(g, f, t);
         return;
     }
