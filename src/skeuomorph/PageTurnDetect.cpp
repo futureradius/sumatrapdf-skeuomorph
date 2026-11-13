@@ -142,6 +142,8 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
     if (n == 0) {
         return s;
     }
+    s.zoom = dm->GetZoomReal(shownNo);
+    EdgesOnScreen(dm, &s.edgesLeft, &s.edgesRight);
     if (IsSingle(dm->GetDisplayMode())) {
         s.left = shown[0];
         return s;

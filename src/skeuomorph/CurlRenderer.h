@@ -22,6 +22,9 @@ struct MainWindow;
 struct CurlSpread {
     Rect left;
     Rect right;
+    float zoom = 0;    // screen px per page unit: pages of different sizes keep their real sizes
+    int edgesLeft = 0; // Page Edges thickness beside the left page, screen px
+    int edgesRight = 0;
 };
 
 enum class CurlShape {

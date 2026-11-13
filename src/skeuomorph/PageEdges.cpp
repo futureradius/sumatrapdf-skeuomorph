@@ -237,17 +237,9 @@ static void PaintSide(HDC hdc, Rect page, Side side, int thick, int dpi, Color p
     }
 }
 
-// hook 5: after the background, before the pages
-void EdgesPaint(HDC hdc, DisplayModel* dm) {
-    int whole = RoomOnScreen(dm);
-    if (whole <= 0 || !dm->pagesInfo) {
-        return;
-    }
-
-    // the Spread on screen, and its outermost pages
+// the Spread on screen, and its outermost pages; at.first == 0: none
+static Spread OutermostPages(DisplayModel* dm, Rect& leftPage, Rect& rightPage) {
     Spread at;
-    Rect leftPage;
-    Rect rightPage;
     for (int pageNo = 1; pageNo <= dm->PageCount(); pageNo++) {
         PageInfo* pi = dm->GetPageInfo(pageNo);
         if (!pi || !pi->isShown || pi->pos.IsEmpty()) {
@@ -267,12 +259,47 @@ void EdgesPaint(HDC hdc, DisplayModel* dm) {
             rightPage = r;
         }
     }
+    return at;
+}
+
+static EdgesPx EdgesAt(DisplayModel* dm, Spread at, int whole) {
+    Reading reading = dm->GetDisplayR2L() ? Reading::RightToLeft : Reading::LeftToRight;
+    return RestingEdges(dm->PageCount(), at, LayoutOf(dm), reading, whole);
+}
+
+// the resting Page Edges' thickness on each side, screen px: the Curl layer
+// tucks them under and slides them out when the page size changes
+void EdgesOnScreen(DisplayModel* dm, int* left, int* right) {
+    *left = *right = 0;
+    int whole = RoomOnScreen(dm);
+    if (whole <= 0 || !dm->pagesInfo) {
+        return;
+    }
+    Rect leftPage;
+    Rect rightPage;
+    Spread at = OutermostPages(dm, leftPage, rightPage);
     if (at.first == 0) {
         return;
     }
+    EdgesPx e = EdgesAt(dm, at, whole);
+    *left = e.left;
+    *right = e.right;
+}
 
-    Reading reading = dm->GetDisplayR2L() ? Reading::RightToLeft : Reading::LeftToRight;
-    EdgesPx e = RestingEdges(dm->PageCount(), at, LayoutOf(dm), reading, whole);
+// hook 5: after the background, before the pages
+void EdgesPaint(HDC hdc, DisplayModel* dm) {
+    int whole = RoomOnScreen(dm);
+    if (whole <= 0 || !dm->pagesInfo) {
+        return;
+    }
+
+    Rect leftPage;
+    Rect rightPage;
+    Spread at = OutermostPages(dm, leftPage, rightPage);
+    if (at.first == 0) {
+        return;
+    }
+    EdgesPx e = EdgesAt(dm, at, whole);
     Color paper;
     ThemePageRenderColors(paper);
     Rect clip(Point(), dm->GetViewPort().Size());
