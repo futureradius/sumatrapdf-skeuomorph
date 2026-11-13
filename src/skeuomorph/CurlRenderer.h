@@ -23,6 +23,7 @@ struct CurlSpread {
     Rect left;
     Rect right;
     float zoom = 0;    // screen px per page unit: pages of different sizes keep their real sizes
+    float spineX = 0;  // Facing and Book View: the spine, canvas px
     int edgesLeft = 0; // Page Edges thickness beside the left page, screen px
     int edgesRight = 0;
 };

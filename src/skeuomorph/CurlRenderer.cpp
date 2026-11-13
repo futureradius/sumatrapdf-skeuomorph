@@ -73,6 +73,19 @@ constexpr int kShadowCopies = 8;
 constexpr float kShadowPerCopy = 0.16f;
 // Single Page: once over, the page fades away
 constexpr float kSingleFadeFrom = 0.55f;
+// pages of different sizes (#31): the view glides from the old Spread's fit
+// to the new one's during the Curl. Page Edges tuck under over the first 15%
+// of the Curl and slide out over as long after landing; a page beneath fades
+// in or out over 35% where it sticks out past the sheet above it
+constexpr float kEdgeTuck = 0.15f;
+constexpr float kUnderFade = 0.35f;
+// same size within 1%; a comic double spread: twice as wide (4%), as high (3%)
+constexpr float kSameSize = 0.01f;
+constexpr float kSpreadWide = 0.04f;
+constexpr float kSpreadHigh = 0.03f;
+// views this close are the same: no glide
+constexpr float kSameZoom = 0.002f;
+constexpr float kSamePx = 0.5f;
 constexpr int kGridX = 48;
 constexpr int kGridY = 64;
 
@@ -106,15 +119,19 @@ struct Consts {
     float shading;
     float backdropX; // kModeBackdrop: a column of plain background; < 0: none
     float pad;
+    float frontSrc[4]; // canvas rect of the front face's picture (kModeImage: rect's)
+    float backSrc[4];
+    float keep[4]; // kModeImage: opaque inside; empty: none
 };
-static_assert(sizeof(Consts) == 160, "matches cbuffer CB, in 16 byte rows");
+static_assert(sizeof(Consts) == 208, "matches cbuffer CB, in 16 byte rows");
 
 enum Mode {
     kModeFlat = 0,
     kModeCurl = 1,
     kModePaper = 2,
     kModeShadow = 3,
-    kModeBackdrop = 4
+    kModeBackdrop = 4,
+    kModeImage = 5
 };
 
 // everything a Curl needs, copied into the drawing thread
@@ -182,6 +199,7 @@ struct Renderer {
     CurlShape shape = CurlShape::Spread;
     Sweep sweep = Sweep::ToLeft;
     bool forward = true;
+    bool glide = false; // the whole new screen is copied
 };
 
 static Vec<Renderer*> gRenderers;
@@ -199,6 +217,15 @@ static Rect UnionOf(Rect a, Rect b) {
         return a;
     }
     return a.Union(b);
+}
+
+static float Lerp(float a, float b, float f) {
+    return a + (b - a) * f;
+}
+
+static float SmoothStep(float a, float b, float x) {
+    x = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return x * x * (3 - 2 * x);
 }
 
 static void Post(Renderer* r, const Cmd& c) {
@@ -571,10 +598,205 @@ static Geometry GeometryOf(const TurnData& t) {
     return g;
 }
 
+//--- pages of different sizes: the view glides with the turn (#31)
+//
+// Pages keep their real sizes. Each Spread's resting view is a camera on a
+// shared world: page units, the spine at x = 0, the Spread's middle at y = 0.
+// During the Curl the camera moves from the old view to the new one, so the
+// old pages (from the old screen copy) and the new ones (from SumatraPDF's new
+// screen) show scaled side by side, and arrives as the sheet lands:
+//
+//      old view               mid-Curl                 new view
+//   +-----------+         +-----------+         +-----------+
+//   |   [A4]|   |   -->   |  [A4][A0] |   -->   |   [ A0  ] |
+//   +-----------+         +-----------+         +-----------+
+
+// screen = world * z + a
+struct Cam {
+    float z = 1;
+    float ax = 0;
+    float ay = 0;
+};
+
+enum ScreenSide {
+    kLeft = 0,
+    kRight = 1
+};
+
+enum class EdgeMode {
+    Crossfade, // same size, or a comic double spread
+    Tuck,      // under the page as the turn starts, out again after landing
+};
+
+struct Glide {
+    bool valid = false;
+    bool on = false;
+    Cam from;
+    Cam to;
+    // per screen side: the old and the new page, world; and in their copies
+    RectF oldPage[2];
+    RectF newPage[2];
+    Rect oldSrc[2];
+    Rect newSrc[2];
+    int oldEdges[2] = {};
+    int newEdges[2] = {};
+    EdgeMode edges[2] = {EdgeMode::Crossfade, EdgeMode::Crossfade};
+    int startSide = kRight; // where the sheet lies before the turn
+    RectF front;            // the sheet before the turn, world
+    RectF back;             // and after it
+    Face frontFace = Face::Old;
+    Face backFace = Face::Landing;
+    Fade fade = Fade::None;
+    float endT = 1; // the layer goes at this share of the Curl
+};
+
+static bool IsEmptyF(RectF r) {
+    return r.dx <= 0 || r.dy <= 0;
+}
+
+static RectF ToWorld(const Cam& c, Rect r) {
+    if (r.IsEmpty()) {
+        return RectF();
+    }
+    return RectF((r.x - c.ax) / c.z, (r.y - c.ay) / c.z, r.dx / c.z, r.dy / c.z);
+}
+
+static RectF ToScreen(const Cam& c, RectF w) {
+    return RectF(w.x * c.z + c.ax, w.y * c.z + c.ay, w.dx * c.z, w.dy * c.z);
+}
+
+static RectF MirrorWorld(RectF w) {
+    return RectF(-(w.x + w.dx), w.y, w.dx, w.dy);
+}
+
+static bool Near(float a, float b, float tolerance) {
+    return b > 0 && fabsf(a / b - 1) < tolerance;
+}
+
+static bool SameSize(RectF a, RectF b) {
+    return Near(a.dx, b.dx, kSameSize) && Near(a.dy, b.dy, kSameSize);
+}
+
+static EdgeMode EdgeModeOf(RectF a, RectF b) {
+    if (IsEmptyF(a) || IsEmptyF(b) || SameSize(a, b)) {
+        return EdgeMode::Crossfade;
+    }
+    bool doubled = Near(a.dx, 2 * b.dx, kSpreadWide) || Near(b.dx, 2 * a.dx, kSpreadWide);
+    if (Near(a.dy, b.dy, kSpreadHigh) && doubled) {
+        return EdgeMode::Crossfade;
+    }
+    return EdgeMode::Tuck;
+}
+
+// a Spread by screen side, and its resting view. Single Page puts its page
+// on the page's side of the spine: the spine is the edge it turns over
+struct Sides {
+    Rect page[2];
+    int edges[2] = {};
+    Cam cam;
+    bool ok = false;
+};
+
+static Sides SidesOf(const CurlSpread& s, CurlShape shape, bool spineRight) {
+    Sides d;
+    d.edges[kLeft] = s.edgesLeft;
+    d.edges[kRight] = s.edgesRight;
+    float spine = 0;
+    if (shape == CurlShape::Single) {
+        d.page[spineRight ? kLeft : kRight] = s.left;
+        spine = (float)(spineRight ? s.left.Right() : s.left.x);
+    } else {
+        d.page[kLeft] = s.left;
+        d.page[kRight] = s.right;
+        spine = s.spineX;
+    }
+    Rect all = UnionOf(d.page[kLeft], d.page[kRight]);
+    d.cam.z = s.zoom;
+    d.cam.ax = spine;
+    d.cam.ay = all.y + all.dy / 2.0f;
+    d.ok = s.zoom > 0 && !all.IsEmpty();
+    return d;
+}
+
+// on: the view moves or a page changes size; otherwise the screen copies
+// stay where they are (GeometryOf)
+static Glide GlideOf(const TurnData& t) {
+    Glide gl;
+    bool spineRight = t.forward == (t.sweep == Sweep::ToRight);
+    Sides a = SidesOf(t.from, t.shape, spineRight);
+    Sides b = SidesOf(t.to, t.shape, spineRight);
+    if (!a.ok || !b.ok) {
+        return gl;
+    }
+    gl.valid = true;
+    gl.from = a.cam;
+    gl.to = b.cam;
+    bool sameView = fabsf(logf(b.cam.z / a.cam.z)) < kSameZoom && fabsf(b.cam.ax - a.cam.ax) < kSamePx &&
+                    fabsf(b.cam.ay - a.cam.ay) < kSamePx;
+    bool resized = false;
+    for (int i = kLeft; i <= kRight; i++) {
+        gl.oldPage[i] = ToWorld(a.cam, a.page[i]);
+        gl.newPage[i] = ToWorld(b.cam, b.page[i]);
+        gl.oldSrc[i] = a.page[i];
+        gl.newSrc[i] = b.page[i];
+        gl.oldEdges[i] = a.edges[i];
+        gl.newEdges[i] = b.edges[i];
+        gl.edges[i] = EdgeModeOf(gl.oldPage[i], gl.newPage[i]);
+        bool both = !IsEmptyF(gl.oldPage[i]) && !IsEmptyF(gl.newPage[i]);
+        resized = resized || (both && !SameSize(gl.oldPage[i], gl.newPage[i]));
+    }
+    gl.on = !sameView || resized;
+
+    // the sheet: the old page on the start side turns over onto the end side,
+    // where it's the new page. A side with no page: blank paper fading in or out
+    gl.startSide = t.sweep == Sweep::ToRight ? kLeft : kRight;
+    int endSide = 1 - gl.startSide;
+    gl.front = gl.oldPage[gl.startSide];
+    gl.back = gl.newPage[endSide];
+    if (IsEmptyF(gl.front) && !IsEmptyF(gl.back)) {
+        gl.front = MirrorWorld(gl.back);
+        gl.frontFace = Face::Paper;
+        gl.fade = Fade::In;
+    } else if (IsEmptyF(gl.back)) {
+        gl.back = MirrorWorld(gl.front);
+        gl.backFace = Face::Paper;
+        gl.fade = Fade::Out;
+    }
+    bool tuck = gl.edges[kLeft] == EdgeMode::Tuck || gl.edges[kRight] == EdgeMode::Tuck;
+    gl.endT = tuck ? 1 + kEdgeTuck : 1;
+    return gl;
+}
+
+// the view at e (0 old .. 1 new): zoom evenly in log scale around the one
+// point that stays put on screen; equal zooms: a plain pan
+static Cam CamAt(const Glide& gl, float e) {
+    if (e <= 0) {
+        return gl.from;
+    }
+    if (e >= 1) {
+        return gl.to;
+    }
+    Cam c;
+    float zoomLog = logf(gl.to.z / gl.from.z);
+    c.z = gl.from.z * expf(zoomLog * e);
+    if (fabsf(zoomLog) < 1e-4f) {
+        c.ax = Lerp(gl.from.ax, gl.to.ax, e);
+        c.ay = Lerp(gl.from.ay, gl.to.ay, e);
+        return c;
+    }
+    float dz = gl.from.z - gl.to.z;
+    float px = (gl.to.ax - gl.from.ax) / dz;
+    float py = (gl.to.ay - gl.from.ay) / dz;
+    c.ax = gl.from.ax + px * (gl.from.z - c.z);
+    c.ay = gl.from.ay + py * (gl.from.z - c.z);
+    return c;
+}
+
 // the Curl in the air, drawing thread only
 struct Flight {
     TurnData turn;
     Geometry geo;
+    Glide glide;
     bool animating = false;
     bool needCover = false;    // the next Present is the covering frame
     bool pendingCover = false; // the next frame signal says it's on screen
@@ -619,6 +841,13 @@ static void SetRect4(float* dst, Rect r) {
     dst[1] = (float)r.y;
     dst[2] = (float)r.dx;
     dst[3] = (float)r.dy;
+}
+
+static void SetRect4F(float* dst, RectF r) {
+    dst[0] = r.x;
+    dst[1] = r.y;
+    dst[2] = r.dx;
+    dst[3] = r.dy;
 }
 
 static void SetPicture(float* dst, const CurlPicture& pic) {
@@ -692,15 +921,6 @@ static void DrawPaper(Gpu& g, const TurnData& t, Rect r) {
     Draw(g, c, nullptr, nullptr, false);
 }
 
-static float Lerp(float a, float b, float f) {
-    return a + (b - a) * f;
-}
-
-static float SmoothStep(float a, float b, float x) {
-    x = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
-    return x * x * (3 - 2 * x);
-}
-
 static float SheetAlpha(Fade fade, float t) {
     if (fade == Fade::Out) {
         return 1 - SmoothStep(kSingleFadeFrom, 1, t);
@@ -723,7 +943,7 @@ static const CurlPicture* FacePicture(Gpu& g, const Flight& f, Face face) {
 }
 
 // the shadow of the lifted paper, on the paper below only
-static void DrawShadow(Gpu& g, const Flight& f, Consts c) {
+static void DrawShadow(Gpu& g, const Rect (&paperBelow)[2], Consts c) {
     if (c.shadowAlpha <= 0) {
         return;
     }
@@ -732,7 +952,7 @@ static void DrawShadow(Gpu& g, const Flight& f, Consts c) {
     c.mode = kModeShadow;
     g.ctx->RSSetState(g.rastClipped.Get());
     g.ctx->OMSetDepthStencilState(g.noDepth.Get(), 0);
-    for (Rect below : f.geo.paperBelow) {
+    for (Rect below : paperBelow) {
         below = below.Intersect(viewRect);
         if (below.IsEmpty()) {
             continue;
@@ -750,46 +970,79 @@ static void DrawShadow(Gpu& g, const Flight& f, Consts c) {
     g.ctx->OMSetDepthStencilState(g.depth.Get(), 0);
 }
 
+// where the turning sheet lies and what its faces show, canvas px
+struct SheetPlace {
+    RectF start; // flat before the turn
+    RectF end;   // and after it, mirrored over the spine
+    float spineX = 0;
+    float dirX = 1;
+    Fade fade = Fade::None;
+    const CurlPicture* front = nullptr; // null: blank paper
+    const CurlPicture* back = nullptr;
+    RectF frontSrc; // the front face in its picture
+    RectF backSrc;
+    Rect paperBelow[2];
+};
+
 // the corner peel: the fold line starts through the outer bottom corner,
 // slanted, and straightens as it sweeps to the spine; the cylinder shrinks
 // over the last 40%, so the sheet lands flat on the other side
-static void DrawSheet(Gpu& g, const Flight& f, float t) {
-    const Geometry& geo = f.geo;
-    if (geo.start.IsEmpty() || geo.end.IsEmpty()) {
+static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, float t) {
+    if (sp.start.dx <= 0 || sp.end.dx <= 0) {
         return;
     }
     float p = 0.5f - 0.5f * cosf(kPi * t);
-    float w = Lerp((float)geo.start.dx, (float)geo.end.dx, p);
-    float h = Lerp((float)geo.start.dy, (float)geo.end.dy, p);
-    float gapStart = geo.dirX > 0 ? geo.start.x - geo.spineX : geo.spineX - geo.start.Right();
+    float w = Lerp(sp.start.dx, sp.end.dx, p);
+    float h = Lerp(sp.start.dy, sp.end.dy, p);
+    float gapStart = sp.dirX > 0 ? sp.start.x - sp.spineX : sp.spineX - (sp.start.x + sp.start.dx);
     float reach = gapStart + w;
 
-    Consts c = BaseConsts(g, f.turn, Rect());
+    Consts c = BaseConsts(g, turn, Rect());
     c.mode = kModeCurl;
-    SetRect4(c.startRect, geo.start);
-    SetRect4(c.endRect, geo.end);
-    c.spineX = geo.spineX;
-    c.dirX = geo.dirX;
+    SetRect4F(c.startRect, sp.start);
+    SetRect4F(c.endRect, sp.end);
+    SetRect4F(c.frontSrc, sp.frontSrc);
+    SetRect4F(c.backSrc, sp.backSrc);
+    c.spineX = sp.spineX;
+    c.dirX = sp.dirX;
     c.progress = p;
     c.lead = kLeadDeg * kPi / 180 * powf(1 - p, kLeadPow);
     c.radius = kRadiusPerWidth * std::min(w, h) * (1 - SmoothStep(kShrinkFrom, 1, p)) + kMinRadius;
     c.camDist = std::max(c.viewSize[1], kCamPerReach * reach) * kCamPerHeight;
     c.shading = kShading;
-    c.alpha = SheetAlpha(geo.fade, t);
+    c.alpha = SheetAlpha(sp.fade, t);
     c.shadowAlpha = kShadow * kShadowPerCopy * c.alpha;
+    SetPicture(c.frontImg, sp.front ? *sp.front : CurlPicture());
+    SetPicture(c.backImg, sp.back ? *sp.back : CurlPicture());
+    DrawShadow(g, sp.paperBelow, c);
+    Draw(g, c, sp.front, sp.back, true);
+}
 
-    const CurlPicture* front = FacePicture(g, f, geo.startFace);
-    const CurlPicture* back = FacePicture(g, f, geo.endFace);
-    SetPicture(c.frontImg, front ? *front : CurlPicture());
-    SetPicture(c.backImg, back ? *back : CurlPicture());
-    DrawShadow(g, f, c);
-    Draw(g, c, front, back, true);
+// the sheet where the screen copies have it: the view doesn't move
+static void DrawSheet(Gpu& g, const Flight& f, float t) {
+    const Geometry& geo = f.geo;
+    if (geo.start.IsEmpty() || geo.end.IsEmpty()) {
+        return;
+    }
+    SheetPlace sp;
+    sp.start = ToRectF(geo.start);
+    sp.end = ToRectF(geo.end);
+    sp.spineX = geo.spineX;
+    sp.dirX = geo.dirX;
+    sp.fade = geo.fade;
+    sp.front = FacePicture(g, f, geo.startFace);
+    sp.back = FacePicture(g, f, geo.endFace);
+    sp.frontSrc = sp.start;
+    sp.backSrc = sp.end;
+    sp.paperBelow[0] = geo.paperBelow[0];
+    sp.paperBelow[1] = geo.paperBelow[1];
+    DrawSheetAt(g, f.turn, sp, t);
 }
 
 // a column of plain background in the old screen: the middle of the margin
 // beside the old page and its Page Edges; -1: none on screen
 static float BackdropX(const TurnData& t) {
-    Rect page = t.from.left;
+    Rect page = UnionOf(t.from.left, t.from.right);
     int left = page.x - t.edgesPx;
     if (left >= 1) {
         return (float)(left / 2);
@@ -849,6 +1102,149 @@ static void DrawSingleAround(Gpu& g, const Flight& f, float t) {
     }
 }
 
+// pic's src stretched over dst, smooth; see-through by 1 - alpha outside keep.
+// No picture: blank paper. dst == src: pixel-exact
+static void DrawImage(Gpu& g, const TurnData& t, RectF dst, const CurlPicture* pic, RectF src, float alpha,
+                      RectF keep = RectF()) {
+    if (IsEmptyF(dst) || alpha <= 0) {
+        return;
+    }
+    Consts c = BaseConsts(g, t, Rect());
+    c.mode = kModeImage;
+    c.alpha = alpha;
+    SetRect4F(c.rect, dst);
+    SetRect4F(c.frontSrc, src);
+    SetRect4F(c.keep, keep);
+    SetPicture(c.frontImg, pic && pic->ok ? *pic : CurlPicture());
+    Draw(g, c, pic, nullptr, false);
+}
+
+// a page's Page Edges, T px thick beside its outer side, pulled out to share
+// out of T (0: tucked under the page). The strip is the copy's own, so it's
+// pixel-exact when the view is at rest and out = 1
+static void DrawEdgeStrip(Gpu& g, const TurnData& t, const Cam& cam, RectF world, Rect src, int side, int T, float out,
+                          float alpha, const CurlPicture* pic) {
+    float w = T * out;
+    if (IsEmptyF(world) || src.IsEmpty() || w < 0.5f || alpha <= 0 || !pic || !pic->ok) {
+        return;
+    }
+    RectF at = ToScreen(cam, world);
+    RectF dst(side == kRight ? at.x + at.dx : at.x - w, at.y, w, at.dy);
+    // the part still out: the outer one
+    float srcX = side == kRight ? src.Right() + T - w : (float)(src.x - T);
+    DrawImage(g, t, dst, pic, RectF(srcX, (float)src.y, w, (float)src.dy), alpha);
+}
+
+// one side's Page Edges at turn progress q (past 1: landed). Tuck: the old
+// page's go under it as the turn starts, the new page's come out after
+// landing. Crossfade: as the page under the sheet shows (start side, the new
+// page comes in) or goes (end side, the old page is covered)
+static void DrawSideEdges(Gpu& g, const Flight& f, const Cam& cam, int side, float q) {
+    const Glide& gl = f.glide;
+    const CurlPicture* oldPic = &g.pics[kSlotOld];
+    const CurlPicture* newPic = f.haveLanding ? &g.pics[kSlotLanding] : nullptr;
+    auto drawOld = [&](float out, float a) {
+        DrawEdgeStrip(g, f.turn, cam, gl.oldPage[side], gl.oldSrc[side], side, gl.oldEdges[side], out, a, oldPic);
+    };
+    auto drawNew = [&](float out, float a) {
+        DrawEdgeStrip(g, f.turn, cam, gl.newPage[side], gl.newSrc[side], side, gl.newEdges[side], out, a, newPic);
+    };
+    if (gl.edges[side] == EdgeMode::Tuck) {
+        if (q < 1) {
+            drawOld(1 - SmoothStep(0, kEdgeTuck, q), 1);
+        } else {
+            drawNew(SmoothStep(0, kEdgeTuck, q - 1), 1);
+        }
+        return;
+    }
+    float qc = std::min(q, 1.0f);
+    float aNew = side == gl.startSide ? SmoothStep(0, kUnderFade, qc) : SmoothStep(1 - kUnderFade, 1, qc);
+    drawOld(1, 1 - aNew);
+    drawNew(1, aNew);
+}
+
+static Rect Rounded(RectF r) {
+    if (IsEmptyF(r)) {
+        return Rect();
+    }
+    int x0 = (int)lroundf(r.x);
+    int y0 = (int)lroundf(r.y);
+    return Rect(x0, y0, (int)lroundf(r.x + r.dx) - x0, (int)lroundf(r.y + r.dy) - y0);
+}
+
+// the strip beside a resting page where its Page Edges go
+static Rect EdgeRoom(Rect page, int side, int T) {
+    if (page.IsEmpty() || T <= 0) {
+        return Rect();
+    }
+    return Rect(side == kRight ? page.Right() : page.x - T, page.y, T, page.dy);
+}
+
+// a glide frame at turn progress q, 0 .. gl.endT. Everything is drawn: the
+// view differs from SumatraPDF's until the sheet lands. Then SumatraPDF's new
+// screen, with the new Page Edges sliding out from under their pages:
+//
+//   background  ->  Page Edges  ->  pages beneath  ->  shadow  ->  sheet
+static void RenderGlide(Gpu& g, const Flight& f, float q) {
+    const Glide& gl = f.glide;
+    const TurnData& turn = f.turn;
+    const CurlPicture* oldPic = &g.pics[kSlotOld];
+    const CurlPicture* newPic = f.haveLanding ? &g.pics[kSlotLanding] : nullptr;
+    float qc = std::min(q, 1.0f);
+    Cam cam = CamAt(gl, 0.5f - 0.5f * cosf(kPi * qc));
+    Size view = CurlLayerSize(g.layer);
+    Rect canvas(0, 0, view.dx, view.dy);
+    float backdropX = BackdropX(turn);
+    DrawBackdrop(g, turn, canvas, *oldPic, backdropX, 1);
+
+    bool landed = q >= 1;
+    if (landed && newPic) {
+        DrawFlat(g, turn, canvas, *newPic);
+        for (int i = kLeft; i <= kRight; i++) {
+            DrawBackdrop(g, turn, EdgeRoom(gl.newSrc[i], i, gl.newEdges[i]), *oldPic, backdropX, 1);
+        }
+    }
+    for (int i = kLeft; i <= kRight; i++) {
+        DrawSideEdges(g, f, cam, i, q);
+    }
+    if (landed) {
+        if (!newPic) {
+            for (int i = kLeft; i <= kRight; i++) {
+                DrawImage(g, turn, ToScreen(cam, gl.newPage[i]), nullptr, RectF(), 1);
+            }
+        }
+        return;
+    }
+
+    // pages beneath, opaque under the sheet's resting outline. Where one
+    // sticks out past it, the new page fades in as the sheet lifts off, the
+    // old one fades out as the sheet lands on it
+    int startSide = gl.startSide;
+    int endSide = 1 - startSide;
+    RectF frontAt = ToScreen(cam, gl.front);
+    RectF backAt = ToScreen(cam, gl.back);
+    RectF revealedAt = ToScreen(cam, gl.newPage[startSide]);
+    RectF staysAt = ToScreen(cam, gl.oldPage[endSide]);
+    RectF keepFront = gl.frontFace == Face::Old ? frontAt : RectF();
+    RectF keepBack = gl.backFace == Face::Landing ? backAt : RectF();
+    DrawImage(g, turn, revealedAt, newPic, ToRectF(gl.newSrc[startSide]), SmoothStep(0, kUnderFade, q), keepFront);
+    DrawImage(g, turn, staysAt, oldPic, ToRectF(gl.oldSrc[endSide]), 1 - SmoothStep(1 - kUnderFade, 1, q), keepBack);
+
+    SheetPlace sp;
+    sp.start = frontAt;
+    sp.end = backAt;
+    sp.spineX = cam.ax;
+    sp.dirX = startSide == kRight ? 1.0f : -1.0f;
+    sp.fade = gl.fade;
+    sp.front = gl.frontFace == Face::Old ? oldPic : nullptr;
+    sp.back = gl.backFace == Face::Landing ? newPic : nullptr;
+    sp.frontSrc = ToRectF(gl.oldSrc[startSide]);
+    sp.backSrc = ToRectF(gl.newSrc[endSide]);
+    sp.paperBelow[0] = Rounded(revealedAt);
+    sp.paperBelow[1] = Rounded(staysAt);
+    DrawSheetAt(g, turn, sp, q);
+}
+
 // Uncovered parts are blank paper until SumatraPDF shows the new Spread, then
 // see-through. Landed: the landing page is the copy of what's beneath, so the
 // last frame matches SumatraPDF's own picture
@@ -876,6 +1272,10 @@ static void RenderFrame(Gpu& g, const Flight& f, float t, Scene scene) {
     g.ctx->PSSetConstantBuffers(0, 1, g.consts.GetAddressOf());
     g.ctx->PSSetSamplers(0, 1, g.samp.GetAddressOf());
 
+    if (f.glide.on) {
+        RenderGlide(g, f, t);
+        return;
+    }
     const Geometry& geo = f.geo;
     if (scene == Scene::Curl && f.turn.shape == CurlShape::Single) {
         DrawSingleAround(g, f, t);
@@ -953,11 +1353,11 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
                        tm.id, what, (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait);
     if (IS_DEBUG) {
         // where the Spreads were, canvas px, for tests/skeuomorph-curl-look.ts:
-        //   skeuomorph-rects: #3 from 10,20,300,400 to 5,20,310,400 edges 12
+        //   skeuomorph-rects: #3 from 10,20,300,400 to 5,20,310,400 edges 12 glide 1
         Rect o = UnionOf(f.turn.from.left, f.turn.from.right);
         Rect n = UnionOf(f.turn.to.left, f.turn.to.right);
-        logf("skeuomorph-rects: #%d from %d,%d,%d,%d to %d,%d,%d,%d edges %d\n", tm.id, o.x, o.y, o.dx, o.dy, n.x, n.y,
-             n.dx, n.dy, f.turn.edgesPx);
+        logf("skeuomorph-rects: #%d from %d,%d,%d,%d to %d,%d,%d,%d edges %d glide %d\n", tm.id, o.x, o.y, o.dx, o.dy,
+             n.x, n.y, n.dx, n.dy, f.turn.edgesPx, f.glide.on ? 1 : 0);
     }
     if (IS_DEBUG) {
         logf("%s", line);
@@ -1025,6 +1425,7 @@ static void StartFlight(Renderer* r, Gpu& g, Flight& f, const TurnData& turn) {
     f = Flight();
     f.turn = turn;
     f.geo = GeometryOf(turn);
+    f.glide = GlideOf(turn);
     f.animating = true;
     f.needCover = true;
     f.refreshMs = RefreshMs(r->hwnd);
@@ -1039,11 +1440,28 @@ static void OnShowsNew(Flight& f, const Cmd& c) {
     }
     f.turn.to = c.now;
     f.geo = GeometryOf(f.turn);
+    // glide or not was decided at the start; only the places follow the layout
+    Glide gl = GlideOf(f.turn);
+    if (gl.valid) {
+        gl.on = f.glide.on;
+        f.glide = gl;
+    }
     f.haveLanding = c.haveLanding;
     if (!f.showsNew) {
         f.showsNew = true;
         f.times.showsNew = CurlNowMs();
     }
+}
+
+// the layer never stays longer than this, whatever SumatraPDF does
+static double StuckMs(const Flight& f) {
+    return std::max(kStuckMs, f.turn.durationMs * (double)f.glide.endT + 1000);
+}
+
+// the share of the Curl when the layer goes: a glide stays up while the new
+// Page Edges slide out
+static float EndT(const Flight& f) {
+    return f.glide.on ? f.glide.endT : 1;
 }
 
 // false: the device is gone, stop drawing
@@ -1073,10 +1491,11 @@ static bool DrawFrame(Renderer* r, Gpu& g, Flight& f) {
     }
 
     double elapsed = now - f.turn.t0;
-    float t = (float)std::min(1.0, elapsed / std::max(f.turn.durationMs, 1));
-    bool landed = t >= 1;
+    float endT = EndT(f);
+    float t = (float)std::min((double)endT, elapsed / std::max(f.turn.durationMs, 1));
+    bool landed = t >= endT;
     bool done = landed && f.landedShown && f.seeThrough;
-    if (done || elapsed > kStuckMs) {
+    if (done || elapsed > StuckMs(f)) {
         // this frame signal is used up: present a see-through frame, or the
         // latency handle never signals again
         RenderFrame(g, f, t, Scene::Empty);
@@ -1177,7 +1596,7 @@ static void DrawLoop(Renderer* r, Gpu& g) {
 
         // only a frame signal may draw: then Present doesn't block
         if (!frameSignal) {
-            if (CurlNowMs() - f.turn.t0 > kStuckMs) {
+            if (CurlNowMs() - f.turn.t0 > StuckMs(f)) {
                 Land(r, g, f, LandHow::TimedOut);
             }
             continue;
@@ -1378,6 +1797,7 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     t.paper = turn.paper;
     t.edgesPx = turn.edgesPx;
     t.canvas = ScreenCopySize(win);
+    r->glide = GlideOf(t).on;
     r->mutex.Lock();
     t.id = ++r->started;
     r->mutex.Unlock();
@@ -1420,6 +1840,10 @@ void CurlWindowShowsNew(MainWindow* win, CurlSpread now) {
         landing = r->sweep == Sweep::ToRight ? now.right : now.left;
     } else if (!r->forward) {
         landing = now.left;
+    }
+    // a glide shows the new pages scaled in a moving view, then the new screen
+    if (r->glide) {
+        landing = Rect(Point(), ScreenCopySize(win));
     }
     Cmd c;
     c.kind = CmdKind::ShowsNew;

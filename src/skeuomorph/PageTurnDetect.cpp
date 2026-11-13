@@ -152,6 +152,7 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
         bool inOrder = shown[0].x <= shown[1].x;
         s.left = inOrder ? shown[0] : shown[1];
         s.right = inOrder ? shown[1] : shown[0];
+        s.spineX = (s.left.Right() + s.right.x) / 2.0f;
         return s;
     }
     // a picture printed across the spine: Curls fold it there, half per side
@@ -160,10 +161,14 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
         int half = r.dx / 2;
         s.left = Rect(r.x, r.y, half, r.dy);
         s.right = Rect(r.x + half, r.y, r.dx - half, r.dy);
+        s.spineX = (float)s.right.x;
         return s;
     }
+    // a lone page: the spine is where a facing page would leave it
     bool rightOfSpine = r.x + r.dx / 2 >= dm->GetViewPort().dx / 2;
     (rightOfSpine ? s.right : s.left) = r;
+    float halfGap = dm->pageSpacing.dx / 2.0f;
+    s.spineX = rightOfSpine ? r.x - halfGap : r.Right() + halfGap;
     return s;
 }
 

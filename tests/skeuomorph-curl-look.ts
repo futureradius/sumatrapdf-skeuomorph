@@ -6,9 +6,14 @@
 //   - the Curl plays to its end ("landed", not "landed at once");
 //   - the frame at 75% differs from the screen before and after the turn: the
 //     layer shows something in between;
-//   - outside the new Spread, the frame at 95% is almost the screen after:
-//     nothing pops when the layer goes (a wide page's sides vanishing at the
-//     end, say). The landing page itself may still be settling;
+//   - outside the new Spread and its Page Edges, the frame at 95% is almost the
+//     screen after: nothing pops when the sheet lands (a wide page's sides
+//     vanishing at the end, say). The landing page itself may still be
+//     settling, and when the page size changes its Page Edges slide out after
+//     landing;
+//   - pages of different sizes (the view glides): once the Page Edges have
+//     slid out (113%), the whole frame is almost the screen after: nothing
+//     pops when the layer goes;
 //   - Single Page: the old page's Page Edges and the new page's never show
 //     both at full strength (pages of different sizes put them elsewhere);
 // and stepping through mixed page sizes at Fit Width, a turn that shows or hides
@@ -55,7 +60,7 @@ const SWP_NOMOVE = 0x2;
 const SWP_NOSIZE = 0x1;
 
 const CURL_MS = 3000;
-const SHOTS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.85, 0.95];
+const SHOTS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.85, 0.95, 1.13];
 const SETTLE_MS = 600;
 const LAND_WAIT_MS = CURL_MS + 4000;
 // the 75% frame differs from before and after in at least this share of pixels (%)
@@ -66,6 +71,8 @@ const CHANGED = 32;
 // share of the canvas's pixels (%)
 const POP_AT = 0.95;
 const POP_MAX = 0.5;
+// a glide's layer stays while the new Page Edges slide out (15% of the Curl)
+const SLID_OUT_AT = 1.13;
 // Page Edges at full strength: this share of their changing pixels match a screen
 const FULL = 0.9;
 const MIN_EDGE_PX = 100;
@@ -134,15 +141,15 @@ function change(a: Uint8Array | null, b: Uint8Array | null, w = 0, skip: Box | n
 // canvas px
 type Box = { x: number; y: number; dx: number; dy: number };
 
-// "#3 from 10,20,300,400 to 5,20,310,400 edges 12"
-function parseRects(line: string): { from: Box; to: Box; edges: number } | null {
-  const m = /from (-?\d+),(-?\d+),(\d+),(\d+) to (-?\d+),(-?\d+),(\d+),(\d+) edges (\d+)/.exec(line);
+// "#3 from 10,20,300,400 to 5,20,310,400 edges 12 glide 1"
+function parseRects(line: string): { from: Box; to: Box; edges: number; glide: boolean } | null {
+  const m = /from (-?\d+),(-?\d+),(\d+),(\d+) to (-?\d+),(-?\d+),(\d+),(\d+) edges (\d+) glide (\d)/.exec(line);
   if (!m) {
     return null;
   }
   const n = m.slice(1).map(Number);
   const box = (i: number) => ({ x: n[i], y: n[i + 1], dx: n[i + 2], dy: n[i + 3] });
-  return { from: box(0), to: box(4), edges: n[8] };
+  return { from: box(0), to: box(4), edges: n[8], glide: n[9] === 1 };
 }
 
 // the room for Page Edges on both sides of a page
@@ -376,17 +383,27 @@ async function runScenario(s: Scenario, fails: string[]): Promise<void> {
       }
       // other frames are for looking: only a corner has lifted at 30%, and in
       // Single Page backward the page is still fading in beside its edge
+      const w = area.right - area.left;
+      const rects = parseRects(r.lines(RECTS_PREFIX).at(-1) ?? "");
+      if (!rects) {
+        fails.push(`${tag}: no Spread rects in the log`);
+        continue;
+      }
       for (let i = 0; i < mid.length; i++) {
         if (SHOTS[i] === POP_AT) {
-          const rects = parseRects(r.lines(RECTS_PREFIX).at(-1) ?? "");
-          if (!rects) {
-            fails.push(`${tag}: no Spread rects in the log`);
-            continue;
-          }
-          const pop = change(mid[i], after, area.right - area.left, rects.to);
+          const t = rects.to;
+          const withEdges = { x: t.x - rects.edges, y: t.y, dx: t.dx + 2 * rects.edges, dy: t.dy };
+          const pop = change(mid[i], after, w, withEdges);
           console.log(`    at 95%: ${pop.toFixed(2)}% differs from after`);
           if (pop > POP_MAX) {
             fails.push(`${tag}: pops at the end: ${pop.toFixed(2)}% of the 95% frame differs from after`);
+          }
+        }
+        if (SHOTS[i] === SLID_OUT_AT && rects.glide) {
+          const pop = change(mid[i], after, w);
+          console.log(`    glide, at 113%: ${pop.toFixed(2)}% differs from after`);
+          if (pop > POP_MAX) {
+            fails.push(`${tag}: pops when the layer goes: ${pop.toFixed(2)}% of the 113% frame differs from after`);
           }
         }
         if (SHOTS[i] !== CHECK_AT) {
