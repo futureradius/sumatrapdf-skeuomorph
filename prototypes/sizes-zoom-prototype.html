@@ -11,7 +11,7 @@
   Pages keep their real sizes relative to each other; the view is a camera that fits
   the current page (or spread). Four ways to move that camera, ?variant=A|B|C|D or the bottom bar.
   Curl = corner peel with the values chosen in #8; Page Edges as chosen in #9. When the page
-  size changes (not a comic double spread), Page Edges tuck under as the turn starts and slide out the same way after landing.
+  size changes (not a comic double spread), Page Edges tuck under as the turn starts and slide out (same curve, own duration) after landing.
   Open by double-clicking (Edge). Nothing is saved; reload resets everything.
 -->
 <style>
@@ -69,7 +69,7 @@ button.big { width:100%; padding:7px; font:inherit; font-weight:600; cursor:poin
     <label class="check"><input type="checkbox" id="hold"> Freeze the next turn at:</label>
     <div class="row">
       <label><span class="hint">Arrow keys move to other pages while frozen.</span><span class="val" id="holdVal"></span></label>
-      <input type="range" id="holdT" min="0" max="1.6" step="0.01" value="0.4">
+      <input type="range" id="holdT" min="0" max="2.5" step="0.01" value="0.4">
       <div class="hint">At 100% the page has landed. Past it, the view may still be moving (C).</div>
     </div>
 
@@ -163,6 +163,7 @@ const SEGS = [
 const SLIDERS = [
   ['speed', 'dur', 'Curl duration', 150, 1500, 10, 700, v => v + ' ms', 'Chosen earlier: 700 ms.'],
   ['speed', 'glide', 'Glide duration (C only)', 100, 1500, 10, 450, v => v + ' ms', 'How long the view takes to glide after the page lands.'],
+  ['speed', 'edgeOut', 'Page Edges slide out', 100, 1000, 10, 350, v => v + ' ms', 'After a size change: how long the new Page Edges take to slide out once the page has landed. The tuck-in stays at 15% of the Curl.'],
 ];
 
 const params = new URLSearchParams(location.search);
@@ -800,7 +801,7 @@ function render(sc) {
   //    turn starts and the new ones slide out once the page has landed; otherwise they crossfade.
   const popOut = side => {
     const at = sc.land[side];
-    return at === undefined ? 1 : smooth(0, EDGE_TUCK * opts.dur, sc.now - at); // the tuck in reverse
+    return at === undefined ? 1 : smooth(0, opts.edgeOut, sc.now - at); // the tuck's curve, reversed, slower
   };
   const sideEdges = (side, baseN, aboveN, lf, aBase) => {
     if (!aboveN) return [[baseN, 1, popOut(side)]];
@@ -896,6 +897,7 @@ function choicesText() {
     `Curl duration: ${opts.dur} ms`,
   ];
   if (VARIANT === 'C') lines.push(`Glide duration: ${opts.glide} ms`);
+  lines.push(`Page Edges slide out: ${opts.edgeOut} ms`);
   const notes = $('#notes').value.trim();
   if (notes) lines.push(`Notes: ${notes}`);
   return lines.join('\n');
