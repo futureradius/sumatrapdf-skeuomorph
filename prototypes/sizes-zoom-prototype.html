@@ -800,7 +800,7 @@ function render(sc) {
   // 1. Page Edges. When the page size changes, the old edges tuck under their page as the
   //    turn starts and the new ones slide out once the page has landed; otherwise they crossfade.
   const popOut = side => {
-    const at = sc.land[side];
+    const at = sc.land[side > 0 ? 'right' : 'left'];
     return at === undefined ? 1 : smooth(0, opts.edgeOut, sc.now - at); // the tuck's curve, reversed, slower
   };
   const sideEdges = (side, baseN, aboveN, lf, aBase) => {
