@@ -10,7 +10,8 @@
   layout to the next instead of cutting. Ticket context: futureradius/sumatrapdf-skeuomorph#31.
   Pages keep their real sizes relative to each other; the view is a camera that fits
   the current page (or spread). Four ways to move that camera, ?variant=A|B|C|D or the bottom bar.
-  Curl = corner peel with the values chosen in #8; Page Edges as chosen in #9.
+  Curl = corner peel with the values chosen in #8; Page Edges as chosen in #9. When the page
+  size changes (not a comic double spread), Page Edges tuck under and pop out after landing.
   Open by double-clicking (Edge). Nothing is saved; reload resets everything.
 -->
 <style>
@@ -117,12 +118,29 @@ const SIZES = {
   strip: { w: 227,  h: 1134, name: 'Till receipt', kind: 'strip' },
   slide: { w: 960,  h: 540,  name: 'Slide 16:9', kind: 'slide' },
   fold:  { w: 1785, h: 842,  name: 'Fold-out (3 × A4)', kind: 'figure' },
+  comic: { w: 480,  h: 737,  name: 'Comic page', kind: 'figure' },
+  dbl:   { w: 960,  h: 737,  name: 'Double spread', kind: 'figure' },
 };
 const DOCS = {
   vast: { name: 'Vastly different', pattern: ['a4', 'a4', 'a0', 'a4', 'card', 'a4', 'strip', 'slide', 'a4', 'fold', 'a5', 'card', 'a0', 'strip', 'slide', 'a4'] },
   some: { name: 'Mostly A4', pattern: ['a4', 'a4', 'a4', 'a4', 'a4', 'a3l', 'a4', 'a4', 'a4', 'a4', 'a4', 'fold', 'a4', 'a4', 'a5', 'a4'] },
+  comic: { name: 'Comic', pattern: ['comic', 'comic', 'dbl', 'comic', 'comic', 'comic', 'comic', 'dbl', 'comic', 'comic', 'comic', 'comic', 'comic', 'dbl', 'comic', 'comic'] },
   same: { name: 'Same size', pattern: ['a4'] },
 };
+
+// How Page Edges change between two pages on one side of the spine:
+// 'same' size, comic double 'spread' (twice as wide): crossfade; otherwise 'tuck' under and pop out.
+function edgeMode(a, b) {
+  if (!pageOk(a) || !pageOk(b)) return 'same';
+  const p = pageSize(a), q = pageSize(b);
+  const near = (x, y, tol) => Math.abs(x / y - 1) < tol;
+  if (near(p.w, q.w, 0.01) && near(p.h, q.h, 0.01)) return 'same';
+  if (near(p.h, q.h, 0.03) && (near(p.w, 2 * q.w, 0.04) || near(q.w, 2 * p.w, 0.04))) return 'spread';
+  return 'tuck';
+}
+const EDGE_TUCK = 0.15;   // share of the turn in which the old Page Edges slide under the page
+const EDGE_POP_MS = 260;  // how long the new Page Edges take to slide out after landing
+const easeOutBack = x => { const c = 1.4; x -= 1; return 1 + (c + 1) * x * x * x + c * x * x; };
 const N = 240;
 const pageOk = n => n >= 1 && n <= N;
 function pageSize(n) { const p = DOCS[opts.doc].pattern; return SIZES[p[(n - 1) % p.length]]; }
@@ -139,7 +157,7 @@ const VARIANTS = [
 // ---------- controls ----------
 // [section, key, label, options "value:Label|...", default]
 const SEGS = [
-  ['view', 'doc', 'Document', 'vast:Vastly different|some:Mostly A4|same:Same size', 'vast'],
+  ['view', 'doc', 'Document', 'vast:Vastly different|some:Mostly A4|comic:Comic|same:Same size', 'vast'],
   ['view', 'view', 'Paged View', 'single:Single Page|facing:Facing', 'single'],
   ['view', 'fit', 'Zoom', 'page:Fit Page|width:Fit Width|actual:Actual Size', 'page'],
 ];
@@ -174,6 +192,7 @@ function buildControls() {
         setPage(before);
         leaves.clear();
         path = null;
+        for (const k in landed) delete landed[k];
       };
       seg.appendChild(b);
     }
@@ -227,6 +246,17 @@ function leafPages(i) {
   return { front: 2 * i + 2, back: pageOk(2 * i + 3) ? 2 * i + 3 : 0 };
 }
 const leafExists = i => i >= 0 && pageOk(leafPages(i).front);
+
+// The pages lying open on each side before and after leaf i turns (either way).
+function turnPairs(i) {
+  if (!facing()) return { right: [i + 1, i + 2] };
+  return { right: [2 * i + 2, 2 * i + 4], left: [2 * i + 1, 2 * i + 3] };
+}
+// Clock time a size-changing turn last landed, per side: its new Page Edges pop out from then.
+const landed = {};
+function markLanding(i, at, into) {
+  for (const [side, [a, b]] of Object.entries(turnPairs(i))) if (edgeMode(a, b) === 'tuck') into[side] = at;
+}
 
 // A Facing sheet changes outline from its front page to its back page as it turns.
 function leafDims(i, t) {
@@ -338,7 +368,7 @@ function update(dt) {
   if (performance.now() - lastTap > tempo * 1.5) tempo += (opts.dur - tempo) * Math.min(1, dt / 250);
   for (const [i, lf] of leaves) {
     lf.t += (lf.target > lf.t ? 1 : -1) * sdt / tempo;
-    if ((lf.target === 1 && lf.t >= 1) || (lf.target === 0 && lf.t <= 0)) leaves.delete(i);
+    if ((lf.target === 1 && lf.t >= 1) || (lf.target === 0 && lf.t <= 0)) { leaves.delete(i); markLanding(i, clock, landed); }
   }
 }
 
@@ -713,9 +743,10 @@ function drawShadow(i, t, style, order, mvp, X) {
 }
 
 // Page Edges: thickness is in screen px (as in SumatraPDF), so it stays the same while zooming.
-// Under page n on `side`, at opacity a.
-function drawStack(n, side, a, mvp, X) {
-  const T = edgeThick(n, side), wr = pageRect(n, side);
+// Under page n on `side`, at opacity a, pulled out to share f of its thickness (0 = tucked under).
+function drawStack(n, side, a, f, mvp, X) {
+  if (!pageOk(n)) return;
+  const T = edgeThick(n, side) * f, wr = pageRect(n, side);
   if (T < 0.5 || a < 0.01) return;
   const r = [wr[0] * X.s + X.ox, wr[1] * X.s + X.oy, wr[2] * X.s + X.ox, wr[3] * X.s + X.oy];
   const o = [side * T, -0.25 * T];
@@ -767,14 +798,26 @@ function render(sc) {
   const aboveRight = moving ? leafPages(hi - 1).front : 0;
   const aboveLeft = moving && leafExists(lo) ? leafPages(lo).back || leafPages(lo).front : 0;
 
-  // 1. Page Edges.
+  // 1. Page Edges. When the page size changes, the old edges tuck under their page as the
+  //    turn starts and the new ones slide out once the page has landed; otherwise they crossfade.
+  const popOut = side => {
+    const at = sc.land[side];
+    return at === undefined ? 1 : easeOutBack(clamp((sc.now - at) / EDGE_POP_MS, 0, 1));
+  };
+  const sideEdges = (side, baseN, aboveN, lf, aBase) => {
+    if (!aboveN) return [[baseN, 1, popOut(side)]];
+    if (!lf || edgeMode(aboveN, baseN) !== 'tuck') return [[baseN, aBase, 1], [aboveN, 1 - aBase, 1]];
+    const q = lf.target === 1 ? lf.t : 1 - lf.t;
+    const aboveLeaves = (side > 0) === (lf.target === 1); // the sheet above lifts off this side
+    return [[aboveLeaves ? aboveN : baseN, 1, Math.min(popOut(side), 1 - smooth(0, EDGE_TUCK, q))]];
+  };
+  const edges = [];
+  for (const [n, a, f] of sideEdges(1, rightN, aboveRight, moving ? sc.air.get(hi - 1) : null, aRight)) edges.push([n, 1, a, f]);
+  if (facing()) for (const [n, a, f] of sideEdges(-1, leftN, aboveLeft, moving ? sc.air.get(lo) : null, aLeft)) edges.push([n, -1, a, f]);
   gl.bindVertexArray(quadVao);
   gl.disable(gl.CULL_FACE);
   gl.useProgram(stackProg.p);
-  if (pageOk(rightN)) drawStack(rightN, 1, aRight, mvp, X);
-  if (aboveRight) drawStack(aboveRight, 1, 1 - aRight, mvp, X);
-  if (facing() && pageOk(leftN)) drawStack(leftN, -1, aLeft, mvp, X);
-  if (facing() && aboveLeft) drawStack(aboveLeft, -1, 1 - aLeft, mvp, X);
+  for (const [n, side, a, f] of edges) drawStack(n, side, a, f, mvp, X);
 
   // 2. The flat pages.
   gl.bindVertexArray(vao);
@@ -812,18 +855,16 @@ function render(sc) {
 
 // ---------- scenes: live, or one frozen turn ----------
 function liveScene() {
-  return { L, air: leaves, cam: camAt(path, clock, L), glide: glideProgress(path, clock) };
+  return { L, air: leaves, cam: camAt(path, clock, L), glide: glideProgress(path, clock), land: landed, now: clock };
 }
 function studyScene() {
   const x = parseFloat($('#holdT').value), T = opts.dur;
   const dir = L < maxL() ? 1 : -1, toL = L + dir;
   const p = buildPath(L, toL, T, 0, rest(L));
-  const air = new Map();
-  if (x < 1) {
-    if (dir > 0) air.set(L, { t: x, style: 'fwd' });
-    else air.set(L - 1, { t: 1 - x, style: 'back' });
-  }
-  return { L: toL, air, cam: camAt(p, x * T, toL), glide: glideProgress(p, x * T), study: { from: L, to: toL } };
+  const air = new Map(), land = {}, i = dir > 0 ? L : L - 1;
+  if (x < 1) air.set(i, dir > 0 ? { t: x, style: 'fwd', target: 1 } : { t: 1 - x, style: 'back', target: 0 });
+  else markLanding(i, T, land);
+  return { L: toL, air, cam: camAt(p, x * T, toL), glide: glideProgress(p, x * T), land, now: x * T, study: { from: L, to: toL } };
 }
 
 // ---------- readout ----------
