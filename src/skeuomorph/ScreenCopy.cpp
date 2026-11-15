@@ -151,6 +151,14 @@ static bool CopyInto(ID3D11Device* dev, HDC src, Rect area, CurlPicture* pic) {
     return pic->ok;
 }
 
+// the size of the copy the UI thread waits for; 0: none
+int ScreenCopyPendingPx(ScreenCopyDesk* desk) {
+    desk->mutex.Lock();
+    int px = desk->src ? desk->area.dx * desk->area.dy : 0;
+    desk->mutex.Unlock();
+    return px;
+}
+
 void ScreenCopyServe(ScreenCopyDesk* desk, ID3D11Device* dev, CurlPicture* slots, int nSlots) {
     desk->mutex.Lock();
     if (!desk->src) {

@@ -81,10 +81,10 @@ static WindowTurns* FindTurns(MainWindow* win, Lookup lookup) {
     return found;
 }
 
-// monotonic ms for TurnClock
+// monotonic ms for TurnClock: the Curls' clock, so the drawing thread can
+// read the clock's Pace
 static i64 NowMs() {
-    static TimeStamp start = TimeGet();
-    return (i64)TimeSinceInMs(start);
+    return (i64)CurlNowMs();
 }
 
 static Fingerprint FingerprintOf(DisplayModel* dm) {
@@ -172,8 +172,11 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
     return s;
 }
 
-static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, int lenMs) {
+static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, int lenMs, int id, const TurnClock& clock) {
     CurlTurn c;
+    c.clockId = id;
+    c.back = clock.IsBack(id);
+    c.pace = clock.PaceNow();
     c.shape = IsSingle(dm->GetDisplayMode()) ? CurlShape::Single : CurlShape::Spread;
     c.sweep = t.sweep;
     c.forward = t.forward;
@@ -194,9 +197,11 @@ static bool IsHidden(MainWindow* win) {
 //   skeuomorph: Curl forward, 1 page, sweep left, 700 ms, 1 in air, 0 landed [1-1 -> 2-2]
 //   skeuomorph: Bundle 18 px backward, 39 pages, sweep right, 910 ms, 2 in air, 0 landed [40-40 -> 1-1]
 //   skeuomorph: nothing (display mode switch) [1-1 -> 1-2]
+//   skeuomorph: Curl backward, 1 page, sweep right, 400 ms, 2 in air, 0 landed [3-3 -> 2-2], sends #4 back
 // "in air" counts this turn; "landed" ones this turn made land early or that
-// finished since the last turn
-static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir, int landed) {
+// finished since the last turn. "sends back": a page in the air turns back
+// instead of a new Curl
+static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir, int landed, int sentBack = 0) {
     TempStr spreads = fmt("[%d-%d -> %d-%d]", from.first, from.last, to.first, to.last);
     if (t.kind == TurnKind::Nothing) {
         logf("skeuomorph: nothing (%s) %s\n", SkipName(t.why), spreads);
@@ -210,11 +215,12 @@ static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir,
     Str dir = t.forward ? StrL("forward") : StrL("backward");
     Str sweep = t.sweep == Sweep::ToLeft ? StrL("left") : StrL("right");
     Str pages = t.pages == 1 ? StrL("page") : StrL("pages");
-    logf("skeuomorph: %s %s, %d %s, sweep %s, %d ms, %d in air, %d landed %s\n", what, dir, t.pages, pages, sweep,
-         lenMs, inAir, landed, spreads);
+    TempStr back = sentBack ? fmt(", sends #%d back", sentBack) : StrL("");
+    logf("skeuomorph: %s %s, %d %s, sweep %s, %d ms, %d in air, %d landed %s%s\n", what, dir, t.pages, pages, sweep,
+         lenMs, inAir, landed, spreads, back);
 }
 #else
-static void LogTurn(const Turn&, Spread, Spread, int, int, int) {}
+static void LogTurn(const Turn&, Spread, Spread, int, int, int, int = 0) {}
 #endif
 
 // everything in the air lands now: the layer goes and the clock forgets it,
@@ -260,19 +266,27 @@ static void FinishTurn(MainWindow* win) {
         return;
     }
 
+    // a page in the air turning back is not a new Curl
     i64 now = NowMs();
     Landed landed;
     wt->clock.SetDuration(PageTurnDurationMs());
-    wt->clock.Start(now, t.kind, &landed);
+    int id = 0;
+    if (t.kind == TurnKind::Curl) {
+        id = wt->clock.Reverse(now, wt->from, to, &landed);
+    }
+    int sentBack = id;
+    if (!id) {
+        id = wt->clock.Start(now, t.kind, wt->from, to, &landed);
+    }
     int lenMs = wt->clock.LengthMs(t.kind, now);
-    LogTurn(t, wt->from, to, lenMs, wt->clock.InAir(), landed.n);
+    LogTurn(t, wt->from, to, lenMs, wt->clock.InAir(), landed.n, sentBack);
 
     // Bundles are still instant jumps in build step 4 (they come in step 7)
     if (t.kind != TurnKind::Curl) {
         LandEverything(wt, win, "Bundle");
         return;
     }
-    StartCurl(win, dm, t, lenMs);
+    StartCurl(win, dm, t, lenMs, id, wt->clock);
     FlashCurlStarted(win);
 }
 

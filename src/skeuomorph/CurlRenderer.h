@@ -2,12 +2,15 @@
    License: GPLv3 */
 
 // Curls: one drawing thread per window owns Direct3D, the Curl layer and every
-// Present. Everything here is called on the UI thread; calls only queue
-// commands, except the two short waits of the no-flash hand-off (ADR 0005):
+// Present. Up to 5 Curls are in the air at once. Everything here is called on
+// the UI thread; calls only queue commands, except the two short waits of the
+// no-flash hand-off (ADR 0005):
 //
 //   hook 3, gate passed   CurlCopyOld      old Spread -> GPU picture (waits ~1 ms)
-//   FinishTurn, a Curl    CurlStart        waits until the first frame is on
-//                                          screen (~10 ms), then SumatraPDF repaints
+//   FinishTurn, a Curl    CurlStart        a new Curl, or one in the air sent
+//                                          back; waits until the frame showing
+//                                          it is on screen (~10 ms), then
+//                                          SumatraPDF repaints
 //   hook 6, flushed       CurlWindowShowsNew  copies the landing page; the
 //                                          uncovered parts go see-through one
 //                                          refresh later, then the layer goes
@@ -34,6 +37,9 @@ enum class CurlShape {
 };
 
 struct CurlTurn {
+    int clockId = 0;   // TurnClock's id
+    bool back = false; // the Curl clockId is sent back (or on again): no new Curl
+    pageturn::Pace pace;
     CurlShape shape = CurlShape::Spread;
     pageturn::Sweep sweep = pageturn::Sweep::ToLeft;
     bool forward = true;
@@ -43,7 +49,8 @@ struct CurlTurn {
     int edgesPx = 0; // room for Page Edges beside the Spread
 };
 
-// times of the last Curl, ms on CurlNowMs()'s clock; 0 = didn't happen
+// times of a Curl, ms on CurlNowMs()'s clock; 0 = didn't happen. A Curl sent
+// back starts new times under a new id
 struct CurlTimes {
     int id = 0;
     double start = 0;      // CurlStart
@@ -77,3 +84,4 @@ void CurlResize(MainWindow* win);
 void CurlDestroy(MainWindow* win);
 
 bool CurlLastTimes(MainWindow* win, CurlTimes* out);
+bool CurlTimesOf(MainWindow* win, int id, CurlTimes* out);

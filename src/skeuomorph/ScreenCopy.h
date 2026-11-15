@@ -24,4 +24,5 @@ Size ScreenCopySize(MainWindow* win);
 bool ScreenCopyAsk(ScreenCopyDesk* desk, MainWindow* win, Rect area, int slot);
 
 // drawing thread
+int ScreenCopyPendingPx(ScreenCopyDesk* desk);
 void ScreenCopyServe(ScreenCopyDesk* desk, ID3D11Device* dev, CurlPicture* slots, int nSlots);

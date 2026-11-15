@@ -65,6 +65,10 @@ constexpr int kMaxBlipFrames = 6;
 // shading pass over pixels within kMaxBlipFrames; the old Spread coming back
 // and gaps at the end have their own checks
 constexpr double kFlickerWindowMs = 150;
+// a tap with other Curls in the air: their sheets pass over pixels in every
+// frame, and SumatraPDF's new Spread can only flash before this Curl's cover
+// is on screen (half a refresh for timing jitter)
+constexpr double kCoverSlackMs = 8;
 constexpr double kFlickerShare = 0.08; // of the canvas
 constexpr double kMinMaskShare = 0.02; // old and new must differ this much to judge
 constexpr double kStartedBelow = 0.98;
@@ -499,11 +503,11 @@ struct Verdict {
 };
 
 // pixels that leave frame k's colour at k+1 and come back within kMaxBlipFrames,
-// for k + 1 shown within kFlickerWindowMs of the tap
-static void ScoreFlicker(const TurnFrames& f, double tapMs, FrameScore* sc, int* maxLen) {
+// for k + 1 shown within windowMs of the tap
+static void ScoreFlicker(const TurnFrames& f, double tapMs, double windowMs, FrameScore* sc, int* maxLen) {
     int nPx = f.thumb.dx * f.thumb.dy;
     for (int k = 0; k + 2 < f.n; k++) {
-        if (f.info[k + 1].t - tapMs > kFlickerWindowMs) {
+        if (f.info[k + 1].t - tapMs > windowMs) {
             break;
         }
         const u8* a = FramePx(f, k);
@@ -566,7 +570,11 @@ static Verdict Judge(const TurnJob& job, const TurnFrames& f, FrameScore* sc) {
     for (int k = 0; k < f.n; k++) {
         v.missed += f.info[k].missed;
     }
-    ScoreFlicker(f, job.tapMs, sc, &v.flickerLen);
+    double windowMs = kFlickerWindowMs;
+    if (job.fastTap && job.times.covered > 0) {
+        windowMs = std::min(windowMs, job.times.covered - job.tapMs + kCoverSlackMs);
+    }
+    ScoreFlicker(f, job.tapMs, windowMs, sc, &v.flickerLen);
     for (int k = 0; k < f.n; k++) {
         if (sc[k].flickerPx > v.flickerPx) {
             v.flickerPx = sc[k].flickerPx;
@@ -844,12 +852,11 @@ static void CALLBACK PollTurns(HWND, UINT, UINT_PTR, DWORD) {
     if (!IsMainWindowValid(gWin)) {
         VecClear(gPending);
     }
-    CurlTimes t;
-    bool have = len(gPending) > 0 && CurlLastTimes(gWin, &t);
     double now = CurlNowMs();
     for (int i = 0; i < len(gPending);) {
         Pending& p = gPending[i];
-        if (have && t.id == p.job.curlId) {
+        CurlTimes t;
+        if (CurlTimesOf(gWin, p.job.curlId, &t)) {
             p.job.times = t;
         }
         double end = EndOf(p, now);

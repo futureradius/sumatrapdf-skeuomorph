@@ -5,7 +5,8 @@
 // SKEUOMORPH_PERF_LOG:
 //   skeuomorph-curl: #3 landed after 702 ms, 42 frames, 0 late, covered 12.8 ms, UI waited 12.1 ms
 // A burst of turns at the usual window size (1638x1000) must show no late
-// frames; a maximized burst is printed too, not judged.
+// frames: single turns, then a riffle and a held key with several Curls in the
+// air (build step 6). A maximized burst is printed too, not judged.
 // Judged only when plugged in: on battery the laptop runs 2-3x slower, so a
 // battery run is printed and noted, not judged.
 //
@@ -34,6 +35,13 @@ const TURNS_FORWARD = 12;
 const TURNS_BACK = 6;
 const SETTLE_MS = 400;
 const FLIGHT_WAIT_MS = 6000;
+const RIFFLE_TAPS = 8;
+const RIFFLE_GAP_MS = 100;
+const HOLD_MS = 1200;
+const KEY_REPEAT_MS = 33;
+// WM_KEYDOWN lParam for a key repeat: the key was down before
+const KEY_REPEAT = 1 << 30;
+const QUIET_MS = 1000;
 
 const SETTINGS = [
   "Theme = Light",
@@ -71,19 +79,37 @@ function powerState(): Power {
 
 const POWER_NAME = ["plugged in", "on battery", "power state unknown"];
 
-// "#3 landed after 702 ms, 42 frames, 0 late, ..."
+// "#3 landed after 702 ms, 42 frames, 0 late, ..."; with several Curls in the
+// air, a sixth lands the oldest at once, and a late frame counts for each Curl
+// in the air
 type Flight = { id: number; landed: boolean; frames: number; late: number; line: string };
 
 function readFlights(path: string): Flight[] {
   const text = existsSync(path) ? readFileSync(path, "utf8") : "";
   const out: Flight[] = [];
   for (const l of text.split(/\r?\n/)) {
-    const m = /^skeuomorph-curl: #(\d+) (landed at once|landed|TIMEOUT).* (\d+) frames, (\d+) late/.exec(l);
+    const m =
+      /^skeuomorph-curl: #(\d+) (landed at once|landed|TIMEOUT)(?: \(([^)]*)\))?.* (\d+) frames, (\d+) late/.exec(l);
     if (m) {
-      out.push({ id: +m[1], landed: m[2] === "landed", frames: +m[3], late: +m[4], line: l });
+      const landed = m[2] === "landed" || m[3] === "sixth Curl";
+      out.push({ id: +m[1], landed, frames: +m[4], late: +m[5], line: l });
     }
   }
   return out;
+}
+
+// until no Curl ended for a while
+async function waitQuiet(path: string): Promise<void> {
+  const deadline = Date.now() + FLIGHT_WAIT_MS;
+  let n = -1;
+  while (Date.now() < deadline) {
+    const now = readFlights(path).length;
+    if (now === n) {
+      return;
+    }
+    n = now;
+    await sleep(QUIET_MS);
+  }
 }
 
 async function waitFlights(path: string, n: number): Promise<void> {
@@ -130,6 +156,27 @@ async function runBurst(size: Size): Promise<Burst> {
       await client.waitForRenderIdle();
       await sleep(SETTLE_MS);
     }
+
+    // several Curls in the air: a riffle, then a held key
+    for (let i = 0; i < RIFFLE_TAPS; i++) {
+      postMessage(frame, WM_KEYDOWN, VK_NEXT, 0);
+      postMessage(frame, WM_KEYUP, VK_NEXT, 0);
+      turns++;
+      await sleep(RIFFLE_GAP_MS);
+    }
+    await waitFlights(perfLog, turns);
+    await client.waitForRenderIdle();
+    await sleep(SETTLE_MS);
+    postMessage(frame, WM_KEYDOWN, VK_NEXT, 0);
+    turns++;
+    const end = Date.now() + HOLD_MS;
+    while (Date.now() < end) {
+      await sleep(KEY_REPEAT_MS);
+      postMessage(frame, WM_KEYDOWN, VK_NEXT, KEY_REPEAT);
+      turns++;
+    }
+    postMessage(frame, WM_KEYUP, VK_NEXT, 0);
+    await waitQuiet(perfLog);
   } finally {
     await killAndWait(proc);
   }

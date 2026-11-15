@@ -6,7 +6,8 @@
 //   skeuomorph-flash: #3 ok, Curl #3, 46 frames, 0 missed, ...
 //   skeuomorph-flash: #4 FLASH (flicker 61% for 3 frames at 17 ms), Curl #4, ...
 //
-// 1. A burst of turns (forward, back, fast taps): every Curl checked, none flashed.
+// 1. A burst of turns (forward, back, fast taps, a riffle of several Curls in
+//    the air, a page sent back): every Curl checked, none flashed.
 // 2. Test of the test: SumatraPDF repaints before the Curl covers the screen and
 //    the layer is 50 ms late (SKEUOMORPH_FLASH=nowait,lag=50). The recorder must
 //    flag flashes, or run 1 proves nothing.
@@ -34,6 +35,8 @@ const SWP_NOMOVE = 0x2;
 const SWP_NOSIZE = 0x1;
 
 const FAST_TAP_MS = 120;
+const RIFFLE_TAP_MS = 90;
+const RIFFLE_TAPS = 6;
 const SETTLE_MS = 500;
 const FLIGHT_WAIT_MS = 6000;
 // the recorder judges a Curl ~400 ms after its layer went
@@ -149,6 +152,26 @@ class Run {
     await this.settle();
   }
 
+  // several Curls in the air at once
+  async riffle(vk: number, n: number): Promise<void> {
+    for (let i = 0; i < n; i++) {
+      this.key(vk);
+      await sleep(RIFFLE_TAP_MS);
+    }
+    await this.waitLanded();
+    await this.settle();
+  }
+
+  // a backward tap sends the page in the air back
+  async sendBack(): Promise<void> {
+    this.key(VK_NEXT);
+    await sleep(FAST_TAP_MS * 2);
+    this.key(VK_PRIOR);
+    await sleep(100);
+    await this.waitLanded();
+    await this.settle();
+  }
+
   curls(): number {
     return this.lines(TURN_PREFIX).filter((t) => t.startsWith("Curl")).length;
   }
@@ -173,7 +196,7 @@ class Run {
 
 type Burst = (r: Run) => Promise<void>;
 
-// forward, back, fast taps forward and back
+// forward, back, fast taps forward and back, a riffle, a page sent back
 const fullBurst: Burst = async (r) => {
   for (let i = 0; i < 5; i++) {
     await r.turn(VK_NEXT);
@@ -185,6 +208,8 @@ const fullBurst: Burst = async (r) => {
     await r.fastTaps(VK_NEXT);
   }
   await r.fastTaps(VK_PRIOR);
+  await r.riffle(VK_NEXT, RIFFLE_TAPS);
+  await r.sendBack();
 };
 
 const shortBurst: Burst = async (r) => {

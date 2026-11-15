@@ -40,6 +40,9 @@ using namespace pageturn;
 // Idle, it sleeps on its wake event. While a Curl plays it waits on the swap
 // chain's frame-latency handle, draws from the clock, then Present(1, 0). No
 // timers, so Curls keep playing while a menu or dialog is open.
+//
+// Every tap starts its own Curl: up to 5 are in the air, all drawn in each
+// frame. A backward tap sends the newest back from where it is instead.
 
 // ADR 0005: usually 9-12 ms, ~35 ms at 4K
 constexpr int kCoverWaitMs = 100;
@@ -71,6 +74,9 @@ constexpr float kCamPerReach = 1.2f;
 // the shadow is 8 faint copies in a ring: a soft edge
 constexpr int kShadowCopies = 8;
 constexpr float kShadowPerCopy = 0.16f;
+// several Curls in the air: fewer, darker copies each, or the GPU falls
+// behind (5 sheets x 8 copies: late frames at 1638x1000)
+constexpr int kMinShadowCopies = 3;
 // Single Page: once over, the page fades away
 constexpr float kSingleFadeFrom = 0.55f;
 // pages of different sizes (#31): the view glides from the old Spread's fit
@@ -89,13 +95,17 @@ constexpr float kSamePx = 0.5f;
 constexpr int kGridX = 48;
 constexpr int kGridY = 64;
 
-// screen copies: the next Curl's old Spread, the flying Curl's, its landing page
+// screen copies land here, then move into their Curl: the next Curl's old
+// Spread, and the newest Curl's landing page
 enum Slot {
     kSlotNextOld = 0,
-    kSlotOld,
     kSlotLanding,
     kSlotCount
 };
+// CurlTimesOf looks this many Curls back
+constexpr int kTimesKept = 16;
+// a copy must end this long before the next frame is due
+constexpr double kCopyMarginMs = 2;
 
 // matches cbuffer CB in Curl.hlsl
 struct Consts {
@@ -136,7 +146,10 @@ enum Mode {
 
 // everything a Curl needs, copied into the drawing thread
 struct TurnData {
-    int id = 0;
+    int id = 0; // the command: a new Curl, or one sent back
+    int clockId = 0;
+    bool back = false;
+    Pace pace;
     double t0 = 0;
     CurlShape shape = CurlShape::Spread;
     Sweep sweep = Sweep::ToLeft;
@@ -186,12 +199,11 @@ struct Renderer {
     Mutex mutex;
     Vec<Cmd> cmds;
     Load load = Load::Loading;
-    int started = 0;   // last Curl queued
-    int coveredId = 0; // its first frame is on screen
-    int goneId = 0;    // Curls up to this one landed and the layer went
-    CurlTimes times;
-    int uiWaitId = 0;
-    double uiWaitMs = 0;
+    int started = 0;   // last Start queued
+    int coveredId = 0; // the frame showing it is on screen
+    int goneId = 0;    // Starts up to this one are done: landed, or sent back again
+    CurlTimes times[kTimesKept];
+    int lastTimes = 0;
 
     // UI thread only
     CurlSpread from;
@@ -199,7 +211,8 @@ struct Renderer {
     CurlShape shape = CurlShape::Spread;
     Sweep sweep = Sweep::ToLeft;
     bool forward = true;
-    bool glide = false; // the whole new screen is copied
+    bool glide = false;      // the whole new screen is copied
+    bool landingCopy = true; // sent back: SumatraPDF shows the old Spread, nothing to copy
 };
 
 static Vec<Renderer*> gRenderers;
@@ -257,7 +270,7 @@ struct Gpu {
     ComPtr<ID3D11RasterizerState> rastClipped; // shadows: only on paper
     ComPtr<ID3D11DepthStencilState> depth;
     ComPtr<ID3D11DepthStencilState> noDepth;
-    CurlPicture pics[kSlotCount];
+    CurlPicture inbox[kSlotCount];
 };
 
 // d3d11.dll is loaded by hand, nothing is linked
@@ -792,34 +805,53 @@ static Cam CamAt(const Glide& gl, float e) {
     return c;
 }
 
-// the Curl in the air, drawing thread only
+// a Curl in the air, drawing thread only
 struct Flight {
-    TurnData turn;
+    TurnData turn; // turn.id: its last command (a new Curl, or sent back)
     Geometry geo;
     Glide glide;
-    bool animating = false;
-    bool needCover = false;    // the next Present is the covering frame
-    bool pendingCover = false; // the next frame signal says it's on screen
+    CurlPicture oldPic;  // the old Spread, whole canvas
+    CurlPicture landPic; // the landing page, once SumatraPDF shows it
+    CurlPicture toPic;   // sent back: the new Spread, whole canvas
+    bool back = false;   // sent back: heading to where it started
+    float t = 0;         // time progress, 0 .. EndT
+    double advancedAt = 0;
     bool showsNew = false;
     bool seeThrough = false;
-    bool landedShown = false;
-    bool haveLanding = false;
+    bool restShown = false; // a frame with it at rest was presented
     int refreshesLeft = -1;
     double lastPresent = 0;
     double refreshMs = 1000.0 / 60;
     CurlTimes times;
 };
 
+// the Curls in the air, oldest first; all turn the same way. A glide flies
+// alone. Each frame shares one cover hand-off
+struct Stage {
+    Vec<Flight*> flights;
+    Pace pace;
+    int lastStart = 0;    // the last Start command taken
+    int needCover = 0;    // the next Present shows this Start
+    int pendingCover = 0; // the next frame signal says it's on screen
+    // whole-canvas pictures of Curls that left the air, for the next copies:
+    // making a new one takes several ms, enough for a late frame
+    CurlPicture spares[kMaxInAir + 1];
+    int nSpares = 0;
+    double lastPresent = 0;
+    double refreshMs = 1000.0 / 60;
+    double copyMsPerMpx = 1; // measured: about 0.9 here
+};
+
 enum class Scene {
     Empty,
-    Curl,
-    Landed
+    Curl
 };
 
 enum class LandHow {
     Done,
     AtOnce,
-    TimedOut
+    TimedOut,
+    SentBack
 };
 
 static double RefreshMs(HWND hwnd) {
@@ -932,24 +964,54 @@ static float SheetAlpha(Fade fade, float t) {
     return 1;
 }
 
-// the picture a face shows, or null for blank paper
-static const CurlPicture* FacePicture(Gpu& g, const Flight& f, Face face) {
+// the picture a face shows, or null for blank paper. The next Curl's old
+// Spread holds this one's landing page, as SumatraPDF last showed it
+static const CurlPicture* FacePicture(const Flight& f, const Flight* next, Face face) {
     if (face == Face::Old) {
-        return &g.pics[kSlotOld];
+        return &f.oldPic;
     }
-    if (face == Face::Landing && f.haveLanding) {
-        return &g.pics[kSlotLanding];
+    if (face != Face::Landing) {
+        return nullptr;
     }
-    return nullptr;
+    if (next && next->oldPic.ok) {
+        return &next->oldPic;
+    }
+    if (f.landPic.ok) {
+        return &f.landPic;
+    }
+    return f.toPic.ok ? &f.toPic : nullptr;
+}
+
+// a glide's new screen
+static const CurlPicture* NewPicture(const Flight& f) {
+    if (f.landPic.ok) {
+        return &f.landPic;
+    }
+    return f.toPic.ok ? &f.toPic : nullptr;
+}
+
+// several Curls in the air: each sheet is drawn in two halves, one per side
+// of the spine; empty clip: no clip
+static void SetClip(Gpu& g, Rect clip) {
+    if (clip.IsEmpty()) {
+        g.ctx->RSSetState(g.rast.Get());
+        return;
+    }
+    D3D11_RECT sc = {clip.x, clip.y, clip.Right(), clip.Bottom()};
+    g.ctx->RSSetState(g.rastClipped.Get());
+    g.ctx->RSSetScissorRects(1, &sc);
 }
 
 // the shadow of the lifted paper, on the paper below only
-static void DrawShadow(Gpu& g, const Rect (&paperBelow)[2], Consts c) {
+static void DrawShadow(Gpu& g, const Rect (&paperBelow)[2], Consts c, Rect clip, int copies) {
     if (c.shadowAlpha <= 0) {
         return;
     }
     Size view = CurlLayerSize(g.layer);
     Rect viewRect(0, 0, view.dx, view.dy);
+    if (!clip.IsEmpty()) {
+        viewRect = viewRect.Intersect(clip);
+    }
     c.mode = kModeShadow;
     g.ctx->RSSetState(g.rastClipped.Get());
     g.ctx->OMSetDepthStencilState(g.noDepth.Get(), 0);
@@ -960,19 +1022,20 @@ static void DrawShadow(Gpu& g, const Rect (&paperBelow)[2], Consts c) {
         }
         D3D11_RECT sc = {below.x, below.y, below.Right(), below.Bottom()};
         g.ctx->RSSetScissorRects(1, &sc);
-        for (int k = 0; k < kShadowCopies; k++) {
-            float a = 2 * kPi * k / kShadowCopies;
+        for (int k = 0; k < copies; k++) {
+            float a = 2 * kPi * k / copies;
             c.shadowOff[0] = cosf(a);
             c.shadowOff[1] = sinf(a);
             Draw(g, c, nullptr, nullptr, true);
         }
     }
-    g.ctx->RSSetState(g.rast.Get());
+    SetClip(g, clip);
     g.ctx->OMSetDepthStencilState(g.depth.Get(), 0);
 }
 
 // where the turning sheet lies and what its faces show, canvas px
 struct SheetPlace {
+    int shadowCopies = kShadowCopies;
     RectF start; // flat before the turn
     RectF end;   // and after it, mirrored over the spine
     float spineX = 0;
@@ -988,7 +1051,7 @@ struct SheetPlace {
 // the corner peel: the fold line starts through the outer bottom corner,
 // slanted, and straightens as it sweeps to the spine; the cylinder shrinks
 // over the last 40%, so the sheet lands flat on the other side
-static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, float t) {
+static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, float t, Rect clip) {
     if (sp.start.dx <= 0 || sp.end.dx <= 0) {
         return;
     }
@@ -1012,32 +1075,33 @@ static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, floa
     c.camDist = std::max(c.viewSize[1], kCamPerReach * reach) * kCamPerHeight;
     c.shading = kShading;
     c.alpha = SheetAlpha(sp.fade, t);
-    c.shadowAlpha = kShadow * kShadowPerCopy * c.alpha;
+    c.shadowAlpha = kShadow * kShadowPerCopy * c.alpha * kShadowCopies / sp.shadowCopies;
     SetPicture(c.frontImg, sp.front ? *sp.front : CurlPicture());
     SetPicture(c.backImg, sp.back ? *sp.back : CurlPicture());
-    DrawShadow(g, sp.paperBelow, c);
+    DrawShadow(g, sp.paperBelow, c, clip, sp.shadowCopies);
     Draw(g, c, sp.front, sp.back, true);
 }
 
 // the sheet where the screen copies have it: the view doesn't move
-static void DrawSheet(Gpu& g, const Flight& f, float t) {
+static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, Rect clip, int shadowCopies) {
     const Geometry& geo = f.geo;
     if (geo.start.IsEmpty() || geo.end.IsEmpty()) {
         return;
     }
     SheetPlace sp;
+    sp.shadowCopies = shadowCopies;
     sp.start = ToRectF(geo.start);
     sp.end = ToRectF(geo.end);
     sp.spineX = geo.spineX;
     sp.dirX = geo.dirX;
     sp.fade = geo.fade;
-    sp.front = FacePicture(g, f, geo.startFace);
-    sp.back = FacePicture(g, f, geo.endFace);
+    sp.front = FacePicture(f, next, geo.startFace);
+    sp.back = FacePicture(f, next, geo.endFace);
     sp.frontSrc = sp.start;
     sp.backSrc = sp.end;
     sp.paperBelow[0] = geo.paperBelow[0];
     sp.paperBelow[1] = geo.paperBelow[1];
-    DrawSheetAt(g, f.turn, sp, t);
+    DrawSheetAt(g, f.turn, sp, f.t, clip);
 }
 
 // plain background in the old screen: x, a column in the middle of the margin
@@ -1074,23 +1138,46 @@ static PointF BackdropAt(const TurnData& t) {
 //   backward: the old page under the incoming sheet, where the new page will
 //             lie; the new page's parts beyond it, background until the sheet
 //             covers them; everything else, the old screen, fading out
-static void DrawSingleAround(Gpu& g, const Flight& f, float t) {
+//
+// Several Curls in the air: the bottom is the newest one's (forward) or the
+// oldest one's (backward); every Curl adds its old screen around the page
+enum class Part {
+    Bottom,
+    Around
+};
+
+// the newest Curl's new page where the sheet lifted off: blank paper until
+// SumatraPDF shows it, then see-through. Sent back, SumatraPDF shows the old
+// Spread there: the new one comes from its copy
+static void DrawRevealed(Gpu& g, const Flight& f, Rect r) {
+    if (f.seeThrough && !f.back) {
+        return;
+    }
+    if (f.toPic.ok) {
+        DrawFlat(g, f.turn, r, f.toPic);
+        return;
+    }
+    DrawPaper(g, f.turn, r);
+}
+
+static void DrawSingleAround(Gpu& g, const Flight& f, Part part) {
     const TurnData& turn = f.turn;
-    const CurlPicture& old = g.pics[kSlotOld];
+    const CurlPicture& old = f.oldPic;
     Rect oldPage = turn.from.left;
     Rect newPage = turn.to.left;
     Size view = CurlLayerSize(g.layer);
     Rect canvas(0, 0, view.dx, view.dy);
-    float settle = SheetAlpha(Fade::Out, t); // 1 until the sheet settles, then 0
+    float settle = SheetAlpha(Fade::Out, f.t); // 1 until the sheet settles, then 0
     PointF backdropAt = BackdropAt(turn);
     Rect parts[4];
     if (turn.forward) {
-        if (!f.seeThrough) {
-            DrawPaper(g, turn, newPage);
-        }
-        Outside(oldPage, newPage, parts);
-        for (Rect r : parts) {
-            DrawBackdrop(g, turn, r, old, backdropAt, settle);
+        if (part == Part::Bottom) {
+            DrawRevealed(g, f, newPage);
+            Outside(oldPage, newPage, parts);
+            for (Rect r : parts) {
+                DrawBackdrop(g, turn, r, old, backdropAt, settle);
+            }
+            return;
         }
         Outside(canvas, oldPage, parts);
         for (Rect r : parts) {
@@ -1099,10 +1186,13 @@ static void DrawSingleAround(Gpu& g, const Flight& f, float t) {
         return;
     }
     Rect under = newPage.Intersect(oldPage);
-    DrawFlat(g, turn, under, old);
-    Outside(newPage, oldPage, parts);
-    for (Rect r : parts) {
-        DrawBackdrop(g, turn, r, old, backdropAt, 1);
+    if (part == Part::Bottom) {
+        DrawFlat(g, turn, under, old);
+        Outside(newPage, oldPage, parts);
+        for (Rect r : parts) {
+            DrawBackdrop(g, turn, r, old, backdropAt, 1);
+        }
+        return;
     }
     Outside(canvas, under, parts);
     for (Rect r : parts) {
@@ -1149,8 +1239,8 @@ static void DrawEdgeStrip(Gpu& g, const TurnData& t, const Cam& cam, RectF world
 // page comes in) or goes (end side, the old page is covered)
 static void DrawSideEdges(Gpu& g, const Flight& f, const Cam& cam, int side, float q) {
     const Glide& gl = f.glide;
-    const CurlPicture* oldPic = &g.pics[kSlotOld];
-    const CurlPicture* newPic = f.haveLanding ? &g.pics[kSlotLanding] : nullptr;
+    const CurlPicture* oldPic = &f.oldPic;
+    const CurlPicture* newPic = NewPicture(f);
     auto drawOld = [&](float out, float a) {
         DrawEdgeStrip(g, f.turn, cam, gl.oldPage[side], gl.oldSrc[side], side, gl.oldEdges[side], out, a, oldPic);
     };
@@ -1193,11 +1283,12 @@ static Rect EdgeRoom(Rect page, int side, int T) {
 // screen, with the new Page Edges sliding out from under their pages:
 //
 //   background  ->  Page Edges  ->  pages beneath  ->  shadow  ->  sheet
-static void RenderGlide(Gpu& g, const Flight& f, float q) {
+static void RenderGlide(Gpu& g, const Flight& f) {
+    float q = f.t;
     const Glide& gl = f.glide;
     const TurnData& turn = f.turn;
-    const CurlPicture* oldPic = &g.pics[kSlotOld];
-    const CurlPicture* newPic = f.haveLanding ? &g.pics[kSlotLanding] : nullptr;
+    const CurlPicture* oldPic = &f.oldPic;
+    const CurlPicture* newPic = NewPicture(f);
     float qc = std::min(q, 1.0f);
     Cam cam = CamAt(gl, 0.5f - 0.5f * cosf(kPi * qc));
     Size view = CurlLayerSize(g.layer);
@@ -1250,19 +1341,107 @@ static void RenderGlide(Gpu& g, const Flight& f, float q) {
     sp.backSrc = ToRectF(gl.newSrc[endSide]);
     sp.paperBelow[0] = Rounded(revealedAt);
     sp.paperBelow[1] = Rounded(staysAt);
-    DrawSheetAt(g, turn, sp, q);
+    DrawSheetAt(g, turn, sp, q, Rect());
+}
+
+// the share of the Curl when the layer goes: a glide stays up while the new
+// Page Edges slide out
+static float EndT(const Flight& f) {
+    return f.glide.on ? f.glide.endT : 1;
+}
+
+// landed, or back where it started
+static bool AtRest(const Flight& f) {
+    return f.back ? f.t <= 0 : f.t >= EndT(f);
+}
+
+// one Curl at rest, before the layer goes: what SumatraPDF shows (or will),
+// so the last frame matches its picture. Landed: the landing page is the copy
+// of what's beneath; back: the old screen
+static void RenderRest(Gpu& g, const Flight& f) {
+    const Geometry& geo = f.geo;
+    if (f.back) {
+        Size view = CurlLayerSize(g.layer);
+        DrawFlat(g, f.turn, Rect(0, 0, view.dx, view.dy), f.oldPic);
+        return;
+    }
+    if (f.turn.shape == CurlShape::Spread) {
+        DrawRevealed(g, f, geo.revealed);
+    } else if (f.turn.forward) {
+        DrawRevealed(g, f, f.turn.to.left);
+    }
+    if (geo.landing.IsEmpty()) {
+        return;
+    }
+    const CurlPicture* land = FacePicture(f, nullptr, Face::Landing);
+    if (land) {
+        DrawFlat(g, f.turn, geo.landing, *land);
+    } else {
+        DrawPaper(g, f.turn, geo.landing);
+    }
+}
+
+// what lies under the sheets: on the side they start from, the newest Curl's
+// new page; on the side they land on, the oldest one's old screen
+static void DrawBottom(Gpu& g, const Stage& st) {
+    const Flight& newest = *VecLast(st.flights);
+    const Flight& oldest = *st.flights[0];
+    if (newest.turn.shape == CurlShape::Spread) {
+        DrawRevealed(g, newest, newest.geo.revealed);
+        DrawFlat(g, oldest.turn, oldest.geo.stays, oldest.oldPic);
+        return;
+    }
+    DrawSingleAround(g, newest.turn.forward ? newest : oldest, Part::Bottom);
+    for (int i = len(st.flights) - 1; i >= 0; i--) {
+        DrawSingleAround(g, *st.flights[i], Part::Around);
+    }
+}
+
+// as in a book: on the side the pages start from, the older ones lie on top;
+// on the side they land on, the newer ones. So each sheet is drawn in two
+// halves, split at the spine, each on a fresh depth buffer:
+//
+//      end side   |   start side          (forward: pages go right to left)
+//   oldest .. newest | newest .. oldest   (drawn in this order)
+static void DrawSheets(Gpu& g, const Stage& st) {
+    int n = len(st.flights);
+    const Flight* next[kMaxInAir + 1] = {};
+    for (int i = 0; i + 1 < n && i < kMaxInAir; i++) {
+        next[i] = st.flights[i + 1];
+    }
+    if (n == 1) {
+        DrawSheet(g, *st.flights[0], nullptr, Rect(), kShadowCopies);
+        return;
+    }
+    const Geometry& geo = VecLast(st.flights)->geo;
+    Size view = CurlLayerSize(g.layer);
+    int spine = ClampI((int)lroundf(geo.spineX), 0, view.dx);
+    Rect left(0, 0, spine, view.dy);
+    Rect right(spine, 0, view.dx - spine, view.dy);
+    Rect startSide = geo.dirX > 0 ? right : left;
+    Rect endSide = geo.dirX > 0 ? left : right;
+    ID3D11DepthStencilView* depth = CurlLayerDepth(g.layer);
+    int copies = std::max(kMinShadowCopies, kShadowCopies / n);
+    for (int i = n - 1; i >= 0; i--) {
+        g.ctx->ClearDepthStencilView(depth, D3D11_CLEAR_DEPTH, 1.0f, 0);
+        DrawSheet(g, *st.flights[i], next[i], startSide, copies);
+    }
+    for (int i = 0; i < n; i++) {
+        g.ctx->ClearDepthStencilView(depth, D3D11_CLEAR_DEPTH, 1.0f, 0);
+        DrawSheet(g, *st.flights[i], next[i], endSide, copies);
+    }
+    SetClip(g, Rect());
 }
 
 // Uncovered parts are blank paper until SumatraPDF shows the new Spread, then
-// see-through. Landed: the landing page is the copy of what's beneath, so the
-// last frame matches SumatraPDF's own picture
-static void RenderFrame(Gpu& g, const Flight& f, float t, Scene scene) {
+// see-through
+static void RenderFrame(Gpu& g, const Stage& st, Scene scene) {
     ID3D11RenderTargetView* rtv = CurlLayerTarget(g.layer);
     float clear[4] = {0, 0, 0, 0};
     g.ctx->OMSetRenderTargets(1, &rtv, CurlLayerDepth(g.layer));
     g.ctx->ClearRenderTargetView(rtv, clear);
     g.ctx->ClearDepthStencilView(CurlLayerDepth(g.layer), D3D11_CLEAR_DEPTH, 1.0f, 0);
-    if (scene == Scene::Empty) {
+    if (scene == Scene::Empty || len(st.flights) == 0) {
         return;
     }
 
@@ -1280,39 +1459,36 @@ static void RenderFrame(Gpu& g, const Flight& f, float t, Scene scene) {
     g.ctx->PSSetConstantBuffers(0, 1, g.consts.GetAddressOf());
     g.ctx->PSSetSamplers(0, 1, g.samp.GetAddressOf());
 
-    if (f.glide.on) {
-        RenderGlide(g, f, t);
+    const Flight& newest = *VecLast(st.flights);
+    bool alone = len(st.flights) == 1;
+    if (alone && newest.back && AtRest(newest)) {
+        RenderRest(g, newest);
         return;
     }
-    const Geometry& geo = f.geo;
-    if (scene == Scene::Curl && f.turn.shape == CurlShape::Single) {
-        DrawSingleAround(g, f, t);
-        DrawSheet(g, f, t);
+    if (newest.glide.on) {
+        RenderGlide(g, newest);
         return;
     }
-    if (!f.seeThrough) {
-        DrawPaper(g, f.turn, geo.revealed);
-    }
-    if (scene == Scene::Curl) {
-        DrawFlat(g, f.turn, geo.stays, g.pics[kSlotOld]);
-        DrawSheet(g, f, t);
+    if (alone && AtRest(newest)) {
+        RenderRest(g, newest);
         return;
     }
-    if (geo.landing.IsEmpty()) {
-        return;
-    }
-    if (f.haveLanding) {
-        DrawFlat(g, f.turn, geo.landing, g.pics[kSlotLanding]);
-    } else {
-        DrawPaper(g, f.turn, geo.landing);
-    }
+    DrawBottom(g, st);
+    DrawSheets(g, st);
+}
+
+static CurlTimes& TimesSlot(Renderer* r, int id) {
+    return r->times[id % kTimesKept];
 }
 
 // the drawing thread's times -> shared, keeping the UI thread's wait
 static void Publish(Renderer* r, const Flight& f) {
     r->mutex.Lock();
-    r->times = f.times;
-    r->times.uiWaitMs = r->uiWaitId == f.times.id ? r->uiWaitMs : 0;
+    CurlTimes& slot = TimesSlot(r, f.times.id);
+    double uiWait = slot.id == f.times.id ? slot.uiWaitMs : 0;
+    slot = f.times;
+    slot.uiWaitMs = uiWait;
+    r->lastTimes = std::max(r->lastTimes, f.times.id);
     r->mutex.Unlock();
 }
 
@@ -1341,13 +1517,15 @@ static void AppendPerfLog(Str path, Str line) {
 // tests/skeuomorph-*.ts parsers don't count it):
 //   skeuomorph-curl: #3 landed after 702 ms, 42 frames, 0 late, covered 12.8 ms, UI waited 12.1 ms
 //   skeuomorph-curl: #4 landed at once (resize) after 310 ms, 18 frames, ...
+//   skeuomorph-curl: #5 sent back after 200 ms, 12 frames, ...   (goes on as #6)
 static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why) {
     Str perfPath = PerfLogPath();
     if (!IS_DEBUG && len(perfPath) == 0) {
         return;
     }
     r->mutex.Lock();
-    double uiWait = r->uiWaitId == f.times.id ? r->uiWaitMs : 0;
+    CurlTimes& slot = TimesSlot(r, f.times.id);
+    double uiWait = slot.id == f.times.id ? slot.uiWaitMs : 0;
     r->mutex.Unlock();
     const CurlTimes& tm = f.times;
     TempStr what = StrL("TIMEOUT");
@@ -1355,11 +1533,13 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
         what = StrL("landed");
     } else if (how == LandHow::AtOnce) {
         what = fmt("landed at once (%s)", Str(why));
+    } else if (how == LandHow::SentBack) {
+        what = StrL("sent back");
     }
     double covered = tm.covered > 0 ? tm.covered - tm.start : -1;
     TempStr line = fmt("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms\n",
                        tm.id, what, (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait);
-    if (IS_DEBUG) {
+    if (IS_DEBUG && how != LandHow::SentBack) {
         // where the Spreads were, canvas px, for tests/skeuomorph-curl-look.ts:
         //   skeuomorph-rects: #3 from 10,20,300,400 to 5,20,310,400 edges 12 glide 1
         Rect o = UnionOf(f.turn.from.left, f.turn.from.right);
@@ -1375,89 +1555,210 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
     }
 }
 
-// the layer goes now; tell a waiting UI thread. why: for the log, landed at once
-static void Land(Renderer* r, Gpu& g, Flight& f, LandHow how, const char* why = "") {
-    if (!f.animating) {
-        return;
+// Starts up to goneId are done: none in the air but newer ones
+static void PublishGone(Renderer* r, const Stage& st) {
+    int gone = st.lastStart;
+    for (Flight* f : st.flights) {
+        gone = std::min(gone, f->turn.id - 1);
     }
-    if (CurlLayerShown(g.layer)) {
-        CurlLayerShow(g.layer, false);
-    }
-    f.animating = false;
-    g.pics[kSlotOld] = CurlPicture();
-    g.pics[kSlotLanding] = CurlPicture();
-    f.times.gone = CurlNowMs();
-    f.times.timedOut = how == LandHow::TimedOut;
-    f.times.landedAtOnce = how == LandHow::AtOnce;
-    Publish(r, f);
-    LogFlight(r, f, how, why);
-
     r->mutex.Lock();
-    r->coveredId = std::max(r->coveredId, f.turn.id);
-    r->goneId = std::max(r->goneId, f.turn.id);
+    r->goneId = std::max(r->goneId, gone);
+    if (len(st.flights) == 0) {
+        r->coveredId = std::max(r->coveredId, st.lastStart);
+    }
     r->mutex.Unlock();
     SetEvent(r->covered);
     SetEvent(r->gone);
 }
 
-// one Curl at a time in this step: a new one lands the one in the air and
-// starts from the old Spread copied at its own tap
-static void StartFlight(Renderer* r, Gpu& g, Flight& f, const TurnData& turn) {
-    bool replacing = f.animating;
-    if (replacing) {
-        f.animating = false;
-        f.times.gone = CurlNowMs();
-        f.times.landedAtOnce = true;
-        LogFlight(r, f, LandHow::AtOnce, "next Curl");
-        r->mutex.Lock();
-        r->goneId = std::max(r->goneId, f.turn.id);
-        r->mutex.Unlock();
+static void Take(CurlPicture& dst, CurlPicture& src) {
+    dst = std::move(src);
+    src = CurlPicture();
+}
+
+static void KeepSpare(Stage& st, CurlPicture& pic) {
+    if (!pic.tex || st.nSpares >= (int)dimof(st.spares)) {
+        pic = CurlPicture();
+        return;
+    }
+    pic.ok = false;
+    Take(st.spares[st.nSpares++], pic);
+}
+
+// the next old Spread is copied into a spare
+static void Refill(Gpu& g, Stage& st) {
+    if (!g.inbox[kSlotNextOld].tex && st.nSpares > 0) {
+        Take(g.inbox[kSlotNextOld], st.spares[--st.nSpares]);
+    }
+}
+
+// a Curl leaves the air; its whole-canvas pictures become spares
+static void Finish(Renderer* r, Gpu& g, Stage& st, int i, LandHow how, const char* why) {
+    Flight* f = st.flights[i];
+    f->times.gone = CurlNowMs();
+    f->times.timedOut = how == LandHow::TimedOut;
+    f->times.landedAtOnce = how == LandHow::AtOnce;
+    Publish(r, *f);
+    LogFlight(r, *f, how, why);
+    KeepSpare(st, f->oldPic);
+    KeepSpare(st, f->toPic);
+    Refill(g, st);
+    VecRemoveAt(st.flights, i);
+    delete f;
+}
+
+// everything lands now and the layer goes; tell a waiting UI thread. why: for
+// the log, landed at once
+static void LandAll(Renderer* r, Gpu& g, Stage& st, LandHow how, const char* why = "") {
+    while (len(st.flights) > 0) {
+        Finish(r, g, st, 0, how, why);
+    }
+    if (CurlLayerShown(g.layer)) {
+        CurlLayerShow(g.layer, false);
+    }
+    // nothing in the air: the memory goes
+    g.inbox[kSlotLanding] = CurlPicture();
+    for (int i = 0; i < st.nSpares; i++) {
+        st.spares[i] = CurlPicture();
+    }
+    st.nSpares = 0;
+    st.lastPresent = 0;
+    PublishGone(r, st);
+}
+
+static bool SameWay(const TurnData& a, const TurnData& b) {
+    return a.shape == b.shape && a.sweep == b.sweep && a.forward == b.forward;
+}
+
+// sent back (or on again) from where it is. Heading back, SumatraPDF shows the
+// old Spread: the new one comes from this tap's copy. New times, new id
+static void SendBack(Renderer* r, Gpu& g, Stage& st, Flight& f, const TurnData& turn) {
+    f.times.gone = CurlNowMs();
+    Publish(r, f);
+    LogFlight(r, f, LandHow::SentBack, "");
+
+    f.back = !f.back;
+    if (f.back && g.inbox[kSlotNextOld].ok) {
+        std::swap(f.toPic, g.inbox[kSlotNextOld]);
+    }
+    g.inbox[kSlotNextOld].ok = false;
+    f.turn.id = turn.id;
+    f.turn.t0 = turn.t0;
+    f.showsNew = false;
+    f.seeThrough = false;
+    f.refreshesLeft = -1;
+    f.restShown = false;
+    f.lastPresent = 0;
+    f.times = CurlTimes();
+    f.times.id = turn.id;
+    f.times.start = turn.t0;
+    st.needCover = turn.id;
+    Publish(r, f);
+}
+
+static Flight* FindFlight(Stage& st, int clockId) {
+    for (Flight* f : st.flights) {
+        if (f->turn.clockId == clockId) {
+            return f;
+        }
+    }
+    return nullptr;
+}
+
+// every tap starts its own Curl, from the old Spread copied at the tap. Only
+// Curls turning the same way share the air, a glide flies alone, and past 5
+// the oldest lands at once
+static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
+    st.pace = turn.pace;
+    Flight* sent = turn.back ? FindFlight(st, turn.clockId) : nullptr;
+    if (sent) {
+        st.lastStart = turn.id;
+        SendBack(r, g, st, *sent, turn);
+        return;
+    }
+
+    // pages sent back home lie where this one lifts: they'd hide it
+    for (int i = len(st.flights) - 1; i >= 0; i--) {
+        if (st.flights[i]->back && AtRest(*st.flights[i])) {
+            Finish(r, g, st, i, LandHow::Done, "");
+        }
     }
 
     // the swap chain follows the canvas; its buffers are undefined until the next Present
     Size size = turn.canvas;
-    if (!size.IsEmpty() && !(size == CurlLayerSize(g.layer))) {
+    bool resize = !size.IsEmpty() && !(size == CurlLayerSize(g.layer));
+    if (len(st.flights) > 0) {
+        const Flight& last = *VecLast(st.flights);
+        if (resize || last.glide.on || GlideOf(turn).on || !SameWay(last.turn, turn)) {
+            LandAll(r, g, st, LandHow::AtOnce, "next Curl");
+        }
+    }
+    if (len(st.flights) >= kMaxInAir) {
+        Finish(r, g, st, 0, LandHow::AtOnce, "sixth Curl");
+    }
+    if (resize) {
         if (CurlLayerShown(g.layer)) {
             CurlLayerShow(g.layer, false);
         }
         CurlLayerResize(g.layer, size);
     }
 
-    // the next Curl must never fly this one's old Spread
+    // set only now: landing the others above must not count this Start as done
+    st.lastStart = turn.id;
+
     // test of the test (FlashRecorder): the first frame comes late
     if (int lagMs = FlashLayerLagMs()) {
         Sleep((DWORD)lagMs);
     }
-    std::swap(g.pics[kSlotOld], g.pics[kSlotNextOld]);
-    g.pics[kSlotNextOld].ok = false;
-    f = Flight();
-    f.turn = turn;
-    f.geo = GeometryOf(turn);
-    f.glide = GlideOf(turn);
-    f.animating = true;
-    f.needCover = true;
-    f.refreshMs = RefreshMs(r->hwnd);
-    f.times.id = turn.id;
-    f.times.start = turn.t0;
-    Publish(r, f);
+    auto f = new Flight();
+    Take(f->oldPic, g.inbox[kSlotNextOld]);
+    Refill(g, st);
+    f->turn = turn;
+    f->geo = GeometryOf(turn);
+    f->glide = GlideOf(turn);
+    f->advancedAt = turn.t0;
+    f->refreshMs = RefreshMs(r->hwnd);
+    f->times.id = turn.id;
+    f->times.start = turn.t0;
+    // the one before lands on the page this one's copy shows
+    if (len(st.flights) > 0 && f->oldPic.ok) {
+        VecLast(st.flights)->landPic = CurlPicture();
+    }
+    VecAppend(st.flights, f);
+    st.needCover = turn.id;
+    Publish(r, *f);
+    PublishGone(r, st);
 }
 
-static void OnShowsNew(Flight& f, const Cmd& c) {
-    if (!f.animating) {
+// SumatraPDF shows the newest command's Spread: for a new Curl, its landing
+// page; sent back, its old Spread
+static void OnShowsNew(Gpu& g, Stage& st, const Cmd& c) {
+    Flight* f = nullptr;
+    for (Flight* x : st.flights) {
+        if (!f || x->turn.id > f->turn.id) {
+            f = x;
+        }
+    }
+    if (!f) {
         return;
     }
-    f.turn.to = c.now;
-    f.geo = GeometryOf(f.turn);
-    // glide or not was decided at the start; only the places follow the layout
-    Glide gl = GlideOf(f.turn);
-    if (gl.valid) {
-        gl.on = f.glide.on;
-        f.glide = gl;
+    if (!f->back) {
+        f->turn.to = c.now;
+        f->geo = GeometryOf(f->turn);
+        // glide or not was decided at the start; only the places follow the layout
+        Glide gl = GlideOf(f->turn);
+        if (gl.valid) {
+            gl.on = f->glide.on;
+            f->glide = gl;
+        }
+        if (c.haveLanding && g.inbox[kSlotLanding].ok) {
+            std::swap(f->landPic, g.inbox[kSlotLanding]);
+        }
     }
-    f.haveLanding = c.haveLanding;
-    if (!f.showsNew) {
-        f.showsNew = true;
-        f.times.showsNew = CurlNowMs();
+    g.inbox[kSlotLanding].ok = false;
+    if (!f->showsNew) {
+        f->showsNew = true;
+        f->times.showsNew = CurlNowMs();
     }
 }
 
@@ -1466,77 +1767,152 @@ static double StuckMs(const Flight& f) {
     return std::max(kStuckMs, f.turn.durationMs * (double)f.glide.endT + 1000);
 }
 
-// the share of the Curl when the layer goes: a glide stays up while the new
-// Page Edges slide out
-static float EndT(const Flight& f) {
-    return f.glide.on ? f.glide.endT : 1;
+static bool IsStuck(const Stage& st, double now) {
+    for (Flight* f : st.flights) {
+        if (now - f->turn.t0 > StuckMs(*f)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// every Curl in the air moves on at the current length, so a Curl sped up by
+// fast tapping keeps its progress; sent back, it moves back
+static void Advance(Stage& st, double now) {
+    int lenMs = std::max(st.pace.LengthMs(TurnKind::Curl, (i64)now), 1);
+    for (Flight* f : st.flights) {
+        double dt = now - f->advancedAt;
+        f->advancedAt = now;
+        if (dt <= 0) {
+            continue;
+        }
+        float step = (float)(dt / lenMs);
+        f->t = f->back ? std::max(0.0f, f->t - step) : std::min(EndT(*f), f->t + step);
+    }
+}
+
+static bool Rested(const Flight& f) {
+    return AtRest(f) && f.restShown;
+}
+
+// Curls at rest leave the air: the oldest once landed (the next one's copy
+// has its page), any once back where it started. The last one waits until
+// SumatraPDF shows the final Spread
+static void DropRested(Renderer* r, Gpu& g, Stage& st) {
+    for (int i = len(st.flights) - 1; i >= 0 && len(st.flights) > 1; i--) {
+        Flight* f = st.flights[i];
+        if (!f->back || !Rested(*f)) {
+            continue;
+        }
+        // the newest: its old Spread is the new Spread of the one before
+        if (i == len(st.flights) - 1) {
+            Take(st.flights[i - 1]->toPic, f->oldPic);
+        }
+        Finish(r, g, st, i, LandHow::Done, "");
+    }
+    while (len(st.flights) > 1 && !st.flights[0]->back && Rested(*st.flights[0])) {
+        Finish(r, g, st, 0, LandHow::Done, "");
+    }
+    for (Flight* f : st.flights) {
+        if (!Rested(*f)) {
+            return;
+        }
+    }
+    if (len(st.flights) > 0 && VecLast(st.flights)->seeThrough) {
+        while (len(st.flights) > 0) {
+            Finish(r, g, st, 0, LandHow::Done, "");
+        }
+    }
+}
+
+// uncovered parts go see-through one refresh after SumatraPDF shows the new Spread
+static void CountToSeeThrough(Flight& f, double now) {
+    if (!f.showsNew || f.seeThrough) {
+        return;
+    }
+    if (f.refreshesLeft < 0) {
+        f.refreshesLeft = kSeeThroughRefreshes;
+    } else if (f.refreshesLeft > 0) {
+        f.refreshesLeft--;
+    }
+    if (f.refreshesLeft == 0) {
+        f.seeThrough = true;
+        f.times.seeThrough = now;
+    }
+}
+
+// the compositor took the covering frame: it's on screen
+static void NoteCovered(Renderer* r, Stage& st, double now) {
+    if (!st.pendingCover) {
+        return;
+    }
+    int id = st.pendingCover;
+    st.pendingCover = 0;
+    r->mutex.Lock();
+    r->coveredId = std::max(r->coveredId, id);
+    r->mutex.Unlock();
+    for (Flight* f : st.flights) {
+        if (f->turn.id == id) {
+            f->times.covered = now;
+            Publish(r, *f);
+        }
+    }
+    SetEvent(r->covered);
 }
 
 // false: the device is gone, stop drawing
-static bool DrawFrame(Renderer* r, Gpu& g, Flight& f) {
+static bool DrawFrame(Renderer* r, Gpu& g, Stage& st) {
     double now = CurlNowMs();
-    if (f.pendingCover) {
-        // the compositor took the covering frame: it's on screen
-        f.pendingCover = false;
-        f.times.covered = now;
-        r->mutex.Lock();
-        r->coveredId = std::max(r->coveredId, f.turn.id);
-        r->mutex.Unlock();
-        Publish(r, f);
-        SetEvent(r->covered);
+    NoteCovered(r, st, now);
+    for (Flight* f : st.flights) {
+        CountToSeeThrough(*f, now);
     }
-
-    if (f.showsNew && !f.seeThrough) {
-        if (f.refreshesLeft < 0) {
-            f.refreshesLeft = kSeeThroughRefreshes;
-        } else if (f.refreshesLeft > 0) {
-            f.refreshesLeft--;
-        }
-        if (f.refreshesLeft == 0) {
-            f.seeThrough = true;
-            f.times.seeThrough = now;
-        }
-    }
-
-    double elapsed = now - f.turn.t0;
-    float endT = EndT(f);
-    float t = (float)std::min((double)endT, elapsed / std::max(f.turn.durationMs, 1));
-    bool landed = t >= endT;
-    bool done = landed && f.landedShown && f.seeThrough;
-    if (done || elapsed > StuckMs(f)) {
+    Advance(st, now);
+    DropRested(r, g, st);
+    bool stuck = IsStuck(st, now);
+    if (len(st.flights) == 0 || stuck) {
         // this frame signal is used up: present a see-through frame, or the
         // latency handle never signals again
-        RenderFrame(g, f, t, Scene::Empty);
+        RenderFrame(g, st, Scene::Empty);
         CurlLayerPresent(g.layer);
-        Land(r, g, f, done ? LandHow::Done : LandHow::TimedOut);
+        LandAll(r, g, st, stuck ? LandHow::TimedOut : LandHow::Done);
         return true;
     }
+    PublishGone(r, st);
 
-    RenderFrame(g, f, t, landed ? Scene::Landed : Scene::Curl);
+    RenderFrame(g, st, Scene::Curl);
     if (!CurlLayerPresent(g.layer)) {
-        Land(r, g, f, LandHow::AtOnce, "Present failed");
+        LandAll(r, g, st, LandHow::AtOnce, "Present failed");
         return false;
     }
     double presented = CurlNowMs();
-    if (f.lastPresent > 0) {
-        f.times.frames++;
-        if (presented - f.lastPresent > kLateFactor * f.refreshMs) {
-            f.times.lateFrames++;
+    st.lastPresent = presented;
+    st.refreshMs = st.flights[0]->refreshMs;
+    for (Flight* f : st.flights) {
+        if (f->lastPresent > 0) {
+            f->times.frames++;
+            if (presented - f->lastPresent > kLateFactor * f->refreshMs) {
+                f->times.lateFrames++;
+            }
+        }
+        f->lastPresent = presented;
+        if (AtRest(*f) && !f->restShown) {
+            f->restShown = true;
+            f->times.landed = presented;
         }
     }
-    f.lastPresent = presented;
 
-    if (f.needCover) {
-        f.needCover = false;
+    if (st.needCover) {
         if (!CurlLayerShown(g.layer)) {
             CurlLayerShow(g.layer, true);
         }
-        f.times.coverShown = presented;
-        f.pendingCover = true;
-    }
-    if (landed && !f.landedShown) {
-        f.landedShown = true;
-        f.times.landed = presented;
+        for (Flight* f : st.flights) {
+            if (f->turn.id == st.needCover) {
+                f->times.coverShown = presented;
+            }
+        }
+        st.pendingCover = st.needCover;
+        st.needCover = 0;
     }
     return true;
 }
@@ -1551,67 +1927,105 @@ static void TakeCmds(Renderer* r, Vec<Cmd>& out) {
 // a frame signal taken with nothing left to draw (a Curl landed at once just
 // then): give it back with a see-through frame, or the latency handle never
 // signals again and every later Curl times out
-static void ReturnFrame(Gpu& g, const Flight& f) {
+static void ReturnFrame(Gpu& g, const Stage& st) {
     if (!CurlLayerTarget(g.layer)) {
         return;
     }
-    RenderFrame(g, f, 0, Scene::Empty);
+    RenderFrame(g, st, Scene::Empty);
     CurlLayerPresent(g.layer);
 }
 
+// copies the old Spread or a landing page while the UI thread waits;
+// learns how long a copy takes
+static void ServeCopy(Renderer* r, Gpu& g, Stage& st) {
+    int px = ScreenCopyPendingPx(r->desk);
+    if (px <= 0) {
+        return;
+    }
+    double t0 = CurlNowMs();
+    ScreenCopyServe(r->desk, g.dev.Get(), g.inbox, kSlotCount);
+    double ms = CurlNowMs() - t0;
+    st.copyMsPerMpx = ms / (px / 1e6);
+}
+
+// a copy takes about a frame at 4K: one that would run into the next frame
+// waits for it, at most this long; 0: copy now
+static double CopyWaitMs(const Stage& st, int px) {
+    if (px <= 0 || st.lastPresent <= 0) {
+        return 0;
+    }
+    double now = CurlNowMs();
+    double due = st.lastPresent + st.refreshMs;
+    double copyMs = px / 1e6 * st.copyMsPerMpx;
+    if (now + copyMs + kCopyMarginMs < due) {
+        return 0;
+    }
+    return std::max(0.0, due - now) + kCopyMarginMs;
+}
+
 static void DrawLoop(Renderer* r, Gpu& g) {
-    Flight f;
+    Stage st;
     Vec<Cmd> cmds;
     while (true) {
+        bool animating = len(st.flights) > 0;
         HANDLE handles[2] = {r->wake, CurlLayerFrameWait(g.layer)};
-        DWORD n = f.animating ? 2 : 1;
-        DWORD res = WaitForMultipleObjects(n, handles, FALSE, f.animating ? kFrameWaitMs : kIdleWaitMs);
+        DWORD n = animating ? 2 : 1;
+        DWORD res = WaitForMultipleObjects(n, handles, FALSE, animating ? kFrameWaitMs : kIdleWaitMs);
         bool frameSignal = res == WAIT_OBJECT_0 + 1;
         if (!IsWindow(r->hwnd)) {
+            for (Flight* f : st.flights) {
+                delete f;
+            }
             return;
         }
-
-        // copies first: the UI thread is waiting for them
-        ScreenCopyServe(r->desk, g.dev.Get(), g.pics, kSlotCount);
 
         TakeCmds(r, cmds);
         for (const Cmd& c : cmds) {
             switch (c.kind) {
                 case CmdKind::Quit:
-                    Land(r, g, f, LandHow::AtOnce, "window closed");
+                    LandAll(r, g, st, LandHow::AtOnce, "window closed");
                     return;
                 case CmdKind::LandAll:
-                    Land(r, g, f, LandHow::AtOnce, c.why);
+                    LandAll(r, g, st, LandHow::AtOnce, c.why);
                     break;
                 case CmdKind::Resize:
-                    Land(r, g, f, LandHow::AtOnce, c.why);
+                    LandAll(r, g, st, LandHow::AtOnce, c.why);
                     CurlLayerResize(g.layer, c.size);
                     break;
                 case CmdKind::Start:
-                    StartFlight(r, g, f, c.turn);
+                    OnStart(r, g, st, c.turn);
                     break;
                 case CmdKind::ShowsNew:
-                    OnShowsNew(f, c);
+                    OnShowsNew(g, st, c);
                     break;
             }
         }
-        if (!f.animating) {
+        if (len(st.flights) == 0) {
+            ServeCopy(r, g, st);
             if (frameSignal) {
-                ReturnFrame(g, f);
+                ReturnFrame(g, st);
             }
             continue;
         }
 
-        // only a frame signal may draw: then Present doesn't block
+        // the UI thread waits for a copy (its Start or ShowsNew comes after
+        // it). One that would run into the next frame waits until it's out
         if (!frameSignal) {
-            if (CurlNowMs() - f.turn.t0 > StuckMs(f)) {
-                Land(r, g, f, LandHow::TimedOut);
+            double waitMs = CopyWaitMs(st, ScreenCopyPendingPx(r->desk));
+            if (waitMs > 0) {
+                frameSignal = WaitForSingleObject(CurlLayerFrameWait(g.layer), (DWORD)waitMs) == WAIT_OBJECT_0;
             }
-            continue;
         }
-        if (!DrawFrame(r, g, f)) {
+
+        // only a frame signal may draw: then Present doesn't block
+        if (frameSignal && !DrawFrame(r, g, st)) {
             logf("skeuomorph-layer: Present failed, Curls are off in this window\n");
+            ServeCopy(r, g, st);
             return;
+        }
+        ServeCopy(r, g, st);
+        if (!frameSignal && IsStuck(st, CurlNowMs())) {
+            LandAll(r, g, st, LandHow::TimedOut);
         }
     }
 }
@@ -1791,10 +2205,14 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     r->shape = turn.shape;
     r->sweep = turn.sweep;
     r->forward = turn.forward;
+    r->landingCopy = !turn.back;
 
     Cmd c;
     c.kind = CmdKind::Start;
     TurnData& t = c.turn;
+    t.clockId = turn.clockId;
+    t.back = turn.back;
+    t.pace = turn.pace;
     t.t0 = CurlNowMs();
     t.shape = turn.shape;
     t.sweep = turn.sweep;
@@ -1828,9 +2246,12 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
         }
     }
     r->mutex.Lock();
-    r->uiWaitId = id;
-    r->uiWaitMs = CurlNowMs() - t.t0;
-    r->times.uiWaitMs = r->times.id == id ? r->uiWaitMs : r->times.uiWaitMs;
+    CurlTimes& slot = TimesSlot(r, id);
+    if (slot.id != id) {
+        slot = CurlTimes();
+        slot.id = id;
+    }
+    slot.uiWaitMs = CurlNowMs() - t.t0;
     r->mutex.Unlock();
 }
 
@@ -1852,6 +2273,9 @@ void CurlWindowShowsNew(MainWindow* win, CurlSpread now) {
     // a glide shows the new pages scaled in a moving view, then the new screen
     if (r->glide) {
         landing = Rect(Point(), ScreenCopySize(win));
+    }
+    if (!r->landingCopy) {
+        landing = Rect();
     }
     Cmd c;
     c.kind = CmdKind::ShowsNew;
@@ -1927,7 +2351,18 @@ bool CurlLastTimes(MainWindow* win, CurlTimes* out) {
         return false;
     }
     r->mutex.Lock();
-    *out = r->times;
+    *out = r->times[r->lastTimes % kTimesKept];
     r->mutex.Unlock();
     return true;
+}
+
+bool CurlTimesOf(MainWindow* win, int id, CurlTimes* out) {
+    Renderer* r = FindRenderer(win);
+    if (!r || id <= 0) {
+        return false;
+    }
+    r->mutex.Lock();
+    *out = TimesSlot(r, id);
+    r->mutex.Unlock();
+    return out->id == id;
 }

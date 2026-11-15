@@ -303,16 +303,18 @@ static void ResetLanded(Landed* landed) {
     }
 }
 
-TurnClock::TurnClock(int durationMs) : durationMs(durationMs) {}
+TurnClock::TurnClock(int durationMs) {
+    pace.durationMs = durationMs;
+}
 
 void TurnClock::SetDuration(int ms) {
-    durationMs = ms;
+    pace.durationMs = ms;
 }
 
 // normal length, or the fast-tapping one. Easing back: hold the fast length
 // while another tap could still count as fast, then return linearly to normal
 // over one normal Curl length
-int TurnClock::CurlMs(i64 nowMs) const {
+int Pace::CurlMs(i64 nowMs) const {
     if (fastMs == 0) {
         return durationMs;
     }
@@ -327,7 +329,7 @@ int TurnClock::CurlMs(i64 nowMs) const {
     return fast + (int)((i64)(durationMs - fast) * easing / durationMs);
 }
 
-int TurnClock::LengthMs(TurnKind kind, i64 nowMs) const {
+int Pace::LengthMs(TurnKind kind, i64 nowMs) const {
     if (kind == TurnKind::Curl) {
         return CurlMs(nowMs);
     }
@@ -337,14 +339,26 @@ int TurnClock::LengthMs(TurnKind kind, i64 nowMs) const {
     return 0;
 }
 
+int TurnClock::CurlMs(i64 nowMs) const {
+    return pace.CurlMs(nowMs);
+}
+
+int TurnClock::LengthMs(TurnKind kind, i64 nowMs) const {
+    return pace.LengthMs(kind, nowMs);
+}
+
+Pace TurnClock::PaceNow() const {
+    return pace;
+}
+
 // a tap quicker than the current Curl sets every Curl to gap x 4, never below
 // 310 ms nor above the normal length (so below 310 the normal length stays)
 void TurnClock::Tap(i64 nowMs) {
     i64 gap = nowMs - lastTapMs;
     if (tapped && gap >= 0 && gap < CurlMs(nowMs)) {
         int fast = std::max(kFastMinMs, (int)gap * kFastGapFactor);
-        fastMs = std::min(fast, durationMs);
-        fastAtMs = nowMs;
+        pace.fastMs = std::min(fast, pace.durationMs);
+        pace.fastAtMs = nowMs;
     }
     tapped = true;
     lastTapMs = nowMs;
@@ -386,6 +400,10 @@ void TurnClock::Advance(i64 nowMs, Landed* landed) {
 // a new Curl or Bundle (both count as a tap); past 5 in the air the oldest
 // lands at once. Returns the new turn's id, 0 for Nothing
 int TurnClock::Start(i64 nowMs, TurnKind kind, Landed* landed) {
+    return Start(nowMs, kind, Spread{}, Spread{}, landed);
+}
+
+int TurnClock::Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Landed* landed) {
     Advance(nowMs, landed);
     if (kind == TurnKind::Nothing) {
         return 0;
@@ -397,8 +415,37 @@ int TurnClock::Start(i64 nowMs, TurnKind kind, Landed* landed) {
     Flight f;
     f.id = nextId++;
     f.kind = kind;
+    f.from = from;
+    f.to = to;
     air[nAir++] = f;
     return f.id;
+}
+
+static bool SameSpread(Spread a, Spread b) {
+    return a.first == b.first && a.last == b.last;
+}
+
+// a tap the other way while a page is in the air sends it back from where it
+// is (and a tap the first way again sends it on). Pages already heading back
+// are passed over, so the next back tap reaches the page before. Counts as a
+// tap. Returns the page's id; 0: none, start a turn instead
+int TurnClock::Reverse(i64 nowMs, Spread from, Spread to, Landed* landed) {
+    Advance(nowMs, landed);
+    for (int i = nAir - 1; i >= 0; i--) {
+        Flight& f = air[i];
+        bool match = f.kind == TurnKind::Curl && SameSpread(f.to, from) && SameSpread(f.from, to);
+        if (match) {
+            Tap(nowMs);
+            std::swap(f.from, f.to);
+            f.back = !f.back;
+            f.progress = 1 - f.progress;
+            return f.id;
+        }
+        if (!f.back) {
+            return 0;
+        }
+    }
+    return 0;
 }
 
 void TurnClock::LandAll(Landed* landed) {
@@ -416,6 +463,15 @@ float TurnClock::Progress(int id) const {
         }
     }
     return -1;
+}
+
+bool TurnClock::IsBack(int id) const {
+    for (int i = 0; i < nAir; i++) {
+        if (air[i].id == id) {
+            return air[i].back;
+        }
+    }
+    return false;
 }
 
 int TurnClock::InAir() const {

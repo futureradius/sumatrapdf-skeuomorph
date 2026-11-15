@@ -416,6 +416,54 @@ static void InAirTest() {
     }
 }
 
+// a backward tap sends the newest page in the air back from where it is
+static void SendBackTest() {
+    Spread a{1, 1};
+    Spread b{2, 2};
+    Spread c{3, 3};
+    Landed landed;
+
+    TurnClock k(700);
+    int id = k.Start(0, TurnKind::Curl, a, b, &landed);
+    utassert(k.Reverse(350, c, b, &landed) == 0);
+    utassert(k.Reverse(350, b, a, &landed) == id);
+    utassert(k.InAir() == 1 && Near(k.Progress(id), 0.5f));
+    utassert(k.IsBack(id));
+    // a forward tap sends it on again
+    utassert(k.Reverse(350, a, b, &landed) == id);
+    utassert(!k.IsBack(id) && Near(k.Progress(id), 0.5f));
+
+    // it counts as a tap: 100 ms after the last one, Curls last 4 x 100
+    utassert(k.Reverse(450, b, a, &landed) == id);
+    utassert(k.CurlMs(450) == 400);
+
+    // landed: nothing to send back
+    TurnClock l(700);
+    int lid = l.Start(0, TurnKind::Curl, a, b, &landed);
+    l.Advance(700, &landed);
+    utassert(landed.n == 1 && landed.ids[0] == lid);
+    utassert(l.Reverse(800, b, a, &landed) == 0);
+
+    // two in the air: back taps send the newest, then the one before it
+    TurnClock m(700);
+    int first = m.Start(0, TurnKind::Curl, a, b, &landed);
+    int second = m.Start(200, TurnKind::Curl, b, c, &landed);
+    utassert(m.Reverse(250, b, a, &landed) == 0);
+    utassert(m.Reverse(600, c, b, &landed) == second);
+    utassert(m.Reverse(620, b, a, &landed) == first);
+    utassert(m.IsBack(first) && m.IsBack(second) && m.InAir() == 2);
+
+    // Bundles aren't sent back
+    TurnClock n(700);
+    n.Start(0, TurnKind::Bundle, a, c, &landed);
+    utassert(n.Reverse(100, c, a, &landed) == 0);
+
+    // the drawing thread's copy of the lengths matches the clock's
+    Pace p = m.PaceNow();
+    utassert(p.CurlMs(620) == m.CurlMs(620) && p.CurlMs(1500) == m.CurlMs(1500));
+    utassert(p.LengthMs(TurnKind::Bundle, 620) == m.LengthMs(TurnKind::Bundle, 620));
+}
+
 static bool SameRoom(Room r, int added, int left, int right) {
     return r.added == added && r.left == left && r.right == right;
 }
@@ -531,6 +579,7 @@ void PageTurnLogic_UnitTests() {
     FastTapTest();
     EaseBackTest();
     InAirTest();
+    SendBackTest();
 }
 
 #endif

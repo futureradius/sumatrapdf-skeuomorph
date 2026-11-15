@@ -146,17 +146,32 @@ struct Landed {
     int n = 0;
 };
 
+// Curl and Bundle lengths at a moment, with fast tapping and easing back. A
+// plain value: the drawing thread keeps a copy to speed up Curls in the air
+struct Pace {
+    int durationMs = 0;
+    int fastMs = 0; // 0: not fast tapping
+    i64 fastAtMs = 0;
+
+    int CurlMs(i64 nowMs) const;
+    int LengthMs(TurnKind kind, i64 nowMs) const;
+};
+
 // Curl and Bundle lengths with fast tapping, and the turns in the air
 class TurnClock {
   public:
     explicit TurnClock(int durationMs);
     void SetDuration(int durationMs);
     int Start(i64 nowMs, TurnKind kind, Landed* landed);
+    int Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Landed* landed);
+    int Reverse(i64 nowMs, Spread from, Spread to, Landed* landed);
     void Advance(i64 nowMs, Landed* landed);
     void LandAll(Landed* landed);
     int CurlMs(i64 nowMs) const;
     int LengthMs(TurnKind kind, i64 nowMs) const;
+    Pace PaceNow() const;
     float Progress(int id) const;
+    bool IsBack(int id) const;
     int InAir() const;
 
   private:
@@ -164,6 +179,9 @@ class TurnClock {
         int id = 0;
         TurnKind kind = TurnKind::Nothing;
         float progress = 0;
+        Spread from; // where it heads from and to: swapped when sent back
+        Spread to;
+        bool back = false;
     };
     void Tap(i64 nowMs);
     void LandFirst(Landed* landed);
@@ -171,11 +189,9 @@ class TurnClock {
     Flight air[kMaxInAir];
     int nAir = 0;
     int nextId = 1;
-    int durationMs = 0;
+    Pace pace;
     bool tapped = false;
     i64 lastTapMs = 0;
-    int fastMs = 0; // 0: not fast tapping
-    i64 fastAtMs = 0;
     i64 advancedMs = 0;
 };
 
