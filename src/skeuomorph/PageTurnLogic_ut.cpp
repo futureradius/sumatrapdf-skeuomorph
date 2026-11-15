@@ -687,33 +687,41 @@ static void SplitTest() {
     Landed landed;
     Sheets s = SheetsOf(TurnKind::Bundle, 38, 19, 0);
 
-    // a back tap splits off the Bundle's last sheet, which goes back from where it is
+    // taps the other way turn the Bundle's last leaves back: it stays one turn
     TurnClock k(700);
     int bundle = k.Start(0, TurnKind::Bundle, a, z, s, &landed, nullptr);
-    int id = 0;
-    int one = k.Split(455, z, y, &landed, &id);
-    utassert(one != 0 && id == bundle && k.InAir() == 2 && k.IsBack(one));
-    utassert(Close(k.Progress(one), 1 - SheetT(s, 0.5f, 13)));
-    // the next back tap splits off the next sheet
-    int two = k.Split(500, y, x, &landed, &id);
-    utassert(two != 0 && two != one && id == bundle && k.InAir() == 3);
-    utassert(Close(k.Progress(two), 1 - SheetT(s, 500.f / 910, 12)));
-    // a forward tap sends the newest split sheet on again
-    utassert(k.Reverse(520, x, y, &landed) == two && !k.IsBack(two));
+    utassert(k.Split(455, z, y, &landed) == bundle && k.InAir() == 1 && k.Peeled(bundle) == 1);
+    utassert(k.Split(500, y, x, &landed) == bundle && k.Peeled(bundle) == 2);
+    // a tap its own way again sends the last one on, up to where it first headed
+    utassert(k.Split(520, x, y, &landed) == bundle && k.Peeled(bundle) == 1);
+    utassert(k.Split(540, y, z, &landed) == bundle && k.Peeled(bundle) == 0);
+    utassert(k.Split(560, z, Spread{42, 43}, &landed) == 0);
+    // it stays in the air until the sheets going back are home
+    utassert(k.Split(600, z, y, &landed) == bundle);
+    k.Advance(900, &landed);
+    utassert(landed.n == 0 && k.InAir() == 1);
+    k.Advance(5000, &landed);
+    utassert(landed.n == 1 && landed.ids[0] == bundle);
 
-    // not a split: a tap from elsewhere, the same way, or back to its start
-    TurnClock m(700);
-    m.Start(0, TurnKind::Bundle, a, c, s, &landed, nullptr);
-    utassert(m.Split(100, b, a, &landed, &id) == 0);
-    utassert(m.Split(100, c, Spread{8, 9}, &landed, &id) == 0);
+    // down to where it started; past that, a turn of its own
     TurnClock n(700);
     n.Start(0, TurnKind::Bundle, a, c, s, &landed, nullptr);
-    utassert(n.Split(100, c, b, &landed, &id) != 0);
-    utassert(n.Split(150, b, a, &landed, &id) == 0);
-    // a Curl isn't split
+    utassert(n.Split(100, c, b, &landed) != 0 && n.Split(150, b, a, &landed) != 0);
+    utassert(n.Split(200, a, Spread{0, 1}, &landed) == 0);
+
+    // not a split: a tap from elsewhere, or a Curl
+    TurnClock m(700);
+    m.Start(0, TurnKind::Bundle, a, c, s, &landed, nullptr);
+    utassert(m.Split(100, b, a, &landed) == 0);
     TurnClock p(700);
     p.Start(0, TurnKind::Curl, b, c, Sheets(), &landed, nullptr);
-    utassert(p.Split(100, c, b, &landed, &id) == 0);
+    utassert(p.Split(100, c, b, &landed) == 0);
+
+    // sheets going back: their share, at least one, all once every leaf is
+    utassert(SheetsBack(s, 0) == 0 && SheetsBack(s, 1) == 1);
+    utassert(SheetsBack(s, 10) == 8 && SheetsBack(s, 19) == 14 && SheetsBack(s, 30) == 14);
+    Sheets five = SheetsOf(TurnKind::Bundle, 10, 5, 0);
+    utassert(five.n == 5 && SheetsBack(five, 3) == 3);
 }
 
 static void RenumberedTest() {

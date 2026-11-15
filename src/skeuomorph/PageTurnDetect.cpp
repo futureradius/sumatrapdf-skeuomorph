@@ -195,7 +195,7 @@ static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, const La
     c.sheets = l.sheets;
     c.firstPage = l.firstPage;
     c.splitOf = l.splitOf;
-    c.splitT = l.splitOf ? clock.Progress(id) : 0;
+    c.peeled = l.splitOf ? clock.Peeled(id) : 0;
     c.across = l.across;
     c.dpi = dm->uiDpi;
     c.pace = clock.PaceNow();
@@ -220,10 +220,10 @@ static bool IsHidden(MainWindow* win) {
 //   skeuomorph: Bundle 18 px backward, 39 pages, sweep right, 910 ms, 2 in air, 0 landed [40-40 -> 1-1]
 //   skeuomorph: nothing (display mode switch) [1-1 -> 1-2]
 //   skeuomorph: Curl backward, 1 page, sweep right, 400 ms, 2 in air, 0 landed [3-3 -> 2-2], sends #4 back
-//   skeuomorph: Curl backward, 1 page, sweep right, 700 ms, 2 in air, 0 landed [40-41 -> 38-39], splits #7
+//   skeuomorph: Curl backward, 1 page, sweep right, 700 ms, 2 in air, 0 landed [40-41 -> 38-39], peels #7
 // "in air" counts this turn; "landed" ones this turn made land early or that
 // finished since the last turn. "sends back": a page in the air turns back
-// instead of a new Curl; "splits": a back tap splits the last sheet off a Bundle
+// instead of a new Curl; "peels": a tap the other way turns a Bundle.s last leaf back
 static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir, int landed, int sentBack = 0,
                     int splits = 0) {
     TempStr spreads = fmt("[%d-%d -> %d-%d]", from.first, from.last, to.first, to.last);
@@ -241,7 +241,7 @@ static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir,
     Str pages = t.pages == 1 ? StrL("page") : StrL("pages");
     TempStr back = sentBack ? fmt(", sends #%d back", sentBack) : StrL("");
     if (splits) {
-        back = fmt(", splits #%d", splits);
+        back = fmt(", peels #%d", splits);
     }
     logf("skeuomorph: %s %s, %d %s, sweep %s, %d ms, %d in air, %d landed %s%s\n", what, dir, t.pages, pages, sweep,
          lenMs, inAir, landed, spreads, back);
@@ -313,10 +313,8 @@ static void FinishTurn(MainWindow* win) {
         l.reversed = l.id != 0;
     }
     if (!l.id && t.kind == TurnKind::Curl) {
-        l.id = wt->clock.Split(now, wt->from, to, &landed, &l.splitOf);
-        if (!l.id) {
-            l.splitOf = 0;
-        }
+        l.id = wt->clock.Split(now, wt->from, to, &landed);
+        l.splitOf = l.id;
     }
     if (!l.id) {
         CurlSpread on = SpreadOnScreen(dm);

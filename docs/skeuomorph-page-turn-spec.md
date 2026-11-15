@@ -158,14 +158,14 @@ The exact maths is in the prototype on the throwaway branch `prototype/curl-look
 |---|---|
 | Thickness | 0.70 px per page turned over, at most 18 px (reached at about 26 pages). Deliberately thicker than real paper, so the sheets read at Curl speed. A Bundle is not as thick as the paper it takes off the Page Edges. |
 | Sheets drawn | about 1 per 1.1 px of thickness, 2 to 14 |
-| What the sheets show | the first sheet's front is the old page and the last sheet's back is the new page; the sheets between are blank paper. Pages inside a Bundle are never prepared. |
+| What the sheets show | the first sheet's front is the old page and the last sheet's back is the new page; the sheets between are blank paper. Revised by the human on 2026-11-15: the outer few sheets on each side (the ones you see) get Rough Pages in build step 8, at low resolution; only the hidden middle ones stay blank paper. |
 | Fan | 20%: each sheet starts a little after the one above, so they spread and land one after another |
 | Stiffness | 40% stiffer than one page: radius × (1 + 1.6 × 0.4), corner lead 35° × 0.6; full effect from 6 px thickness up |
 | Length | Curl length × 1.3 (910 ms by default) |
 
 - **Lifting:** the Page Edges it leaves shrink while the Bundle's bottom sheet lifts off (the first 12% of that sheet's movement), not before.
 - **Landing:** the Page Edges it lands on grow over the last 18% of the turn.
-- **A backward tap while a Bundle is in the air** splits off its last sheet, which goes back from where it is.
+- **A tap the other way while a Bundle is in the air** turns its last leaf back (decided by the human on 2026-11-15, in build step 7): the Bundle stays one stack; its trailing sheets go back from where they are, the leading ones land. Each further tap turns back more, in proportion to the pages; enough taps turn the whole Bundle home, and taps past that are turns of their own. A tap the Bundle's own way again sends the last sheet turned back on.
 - **A new jump across pages still in the air** lands them at once.
 - **Different page sizes:** the sheets between step evenly from the top page's size to the bottom's.
 

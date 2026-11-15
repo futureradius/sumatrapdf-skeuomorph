@@ -3,14 +3,15 @@
 //
 // Reads the debug log's per-turn lines and per-Curl lines:
 //   skeuomorph: Bundle 18 px forward, 798 pages, sweep left, 910 ms, 1 in air, 0 landed [1-2 -> 799-800]
-//   skeuomorph: Curl backward, 2 pages, sweep right, 700 ms, 2 in air, 0 landed [799-800 -> 797-798], splits #3
-//   skeuomorph-curl: #3 landed after 912 ms, 55 frames, 0 late, ..., 13 of 14 sheets
+//   skeuomorph: Curl backward, 2 pages, sweep right, 700 ms, 2 in air, 0 landed [799-800 -> 797-798], peels #3
+//   skeuomorph-curl: #3 landed after 912 ms, 55 frames, 0 late, ..., 14 sheets, 1 back
 //
 // 1. Home and End curl a Bundle of 14 sheets that plays its whole length
 //    (PageTurnDuration x 1.3), not an instant jump.
 // 2. A small jump draws fewer sheets: 2 pages, 2 sheets.
-// 3. A back tap while a Bundle is in the air splits off its last sheet: both
-//    land in their own time, on the Spread before the Bundle's end.
+// 3. A tap the other way while a Bundle is in the air turns its last sheet
+//    back: still one turn, landing in its own time, on the Spread before.
+//    Enough such taps turn the whole Bundle back (5 Page Downs, Home, 6 Page Downs).
 // 4. A jump across a page still in the air lands that page at once.
 // 5. Bundles count in the tapping rhythm and the 5 in the air: after quick
 //    taps, End is shorter than 910 ms and shares the air.
@@ -75,29 +76,29 @@ function check(name: string, expect: string, got: string, ok: boolean): void {
   rows.push({ name, expect, got, ok });
 }
 
-// "Bundle 18 px forward, 798 pages, sweep left, 910 ms, 1 in air, 0 landed [1-2 -> 799-800], splits #3"
-type Turn = { kind: string; lenMs: number; inAir: number; from: string; to: string; splits: boolean; line: string };
+// "Bundle 18 px forward, 798 pages, sweep left, 910 ms, 1 in air, 0 landed [1-2 -> 799-800]"
+type Turn = { kind: string; lenMs: number; inAir: number; from: string; to: string; peels: boolean; line: string };
 
 function parseTurn(line: string): Turn | null {
   const m = /^(\S+).*, (\d+) ms, (\d+) in air, \d+ landed \[([\d-]+) -> ([\d-]+)\]/.exec(line);
   if (!m) {
     return null;
   }
-  return { kind: m[1], lenMs: +m[2], inAir: +m[3], from: m[4], to: m[5], splits: line.includes(", splits #"), line };
+  return { kind: m[1], lenMs: +m[2], inAir: +m[3], from: m[4], to: m[5], peels: line.includes(", peels #"), line };
 }
 
-// "#3 landed after 912 ms, 55 frames, 0 late, ..., 13 of 14 sheets"
-type Flight = { id: number; how: string; why: string; afterMs: number; sheets: number; of: number; line: string };
+// "#3 landed after 912 ms, 55 frames, 0 late, ..., 14 sheets, 1 back"
+type Flight = { id: number; how: string; why: string; afterMs: number; sheets: number; back: number; line: string };
 
 function parseFlight(line: string): Flight | null {
   const m = /^#(\d+) (landed at once|landed|TIMEOUT|sent back)(?: \(([^)]*)\))? after (-?\d+) ms/.exec(line);
   if (!m) {
     return null;
   }
-  const s = /, (\d+)(?: of (\d+))? sheets$/.exec(line);
+  const s = /, (\d+) sheets(?:, (\d+) back)?$/.exec(line);
   const sheets = s ? +s[1] : 1;
-  const of = s?.[2] ? +s[2] : sheets;
-  return { id: +m[1], how: m[2], why: m[3] ?? "", afterMs: +m[4], sheets, of, line };
+  const back = s?.[2] ? +s[2] : 0;
+  return { id: +m[1], how: m[2], why: m[3] ?? "", afterMs: +m[4], sheets, back, line };
 }
 
 class Session {
@@ -156,7 +157,8 @@ class Session {
           .filter((f): f is Flight => f !== null),
       );
       const ended = flights.filter((f) => f.how !== "sent back").length;
-      if (turns.length > 0 && ended >= turns.filter((t) => !t.line.includes("sends #")).length) {
+      const starts = turns.filter((t) => !t.line.includes("sends #") && !t.peels).length;
+      if (turns.length > 0 && ended >= starts) {
         break;
       }
       await sleep(100);
@@ -168,10 +170,10 @@ class Session {
 }
 
 function describe(turns: Turn[], flights: Flight[]): string {
-  const t = turns.map((x) => `${x.kind} ${x.lenMs} ms ${x.from}->${x.to}${x.splits ? " splits" : ""}`).join("; ");
+  const t = turns.map((x) => `${x.kind} ${x.lenMs} ms ${x.from}->${x.to}${x.peels ? " peels" : ""}`).join("; ");
   const f = flights
     .map((x) => {
-      const sheets = x.of > 1 ? (x.sheets === x.of ? `, ${x.sheets} sheets` : `, ${x.sheets}/${x.of} sheets`) : "";
+      const sheets = x.sheets > 1 ? `, ${x.sheets} sheets${x.back ? `, ${x.back} back` : ""}` : "";
       return `#${x.id} ${x.how}${x.why ? ` (${x.why})` : ""} ${x.afterMs} ms${sheets}`;
     })
     .join("; ");
@@ -210,16 +212,40 @@ async function splitLastSheet(s: Session): Promise<void> {
   const bundle = flights[0];
   const ok =
     turns.length === 2 &&
-    turns[1].splits &&
-    turns[1].kind === "Curl" &&
-    turns[1].inAir === 2 &&
+    turns[1].peels &&
+    turns[1].inAir === 1 &&
     turns[1].to === "797-798" &&
-    flights.length === 2 &&
+    flights.length === 1 &&
     bundle.how === "landed" &&
-    bundle.sheets === MAX_SHEETS - 1 &&
-    bundle.of === MAX_SHEETS &&
-    flights[1].how === "landed";
-  check("End, Page Up mid-Bundle", "last sheet split off, both land, on 797-798", describe(turns, flights), ok);
+    bundle.sheets === MAX_SHEETS &&
+    bundle.back === 1;
+  check("End, Page Up mid-Bundle", "last sheet turns back, lands on 797-798", describe(turns, flights), ok);
+  s.key(VK_HOME);
+  await s.collect();
+}
+
+// the human's case: reading on right after Home turns the whole Bundle back
+async function readOnAfterHome(s: Session): Promise<void> {
+  s.mark();
+  for (let i = 0; i < 5; i++) {
+    s.key(VK_NEXT);
+    await sleep(150);
+  }
+  s.key(VK_HOME);
+  await sleep(150);
+  for (let i = 0; i < 6; i++) {
+    s.key(VK_NEXT);
+    await sleep(150);
+  }
+  const { turns, flights } = await s.collect();
+  const home = flights.find((f) => f.sheets > 1);
+  const ok =
+    turns[turns.length - 1]?.to === "13-14" &&
+    turns.filter((t) => t.peels).length === 5 &&
+    !!home &&
+    home.how === "landed" &&
+    home.back === home.sheets;
+  check("5 Page Downs, Home, 6 Page Downs", "whole Bundle turns back, lands on 13-14", describe(turns, flights), ok);
   s.key(VK_HOME);
   await s.collect();
 }
@@ -235,7 +261,7 @@ async function jumpAcross(s: Session): Promise<void> {
   const across = flights.filter((f) => f.why === "jump across");
   const last = flights[flights.length - 1];
   // quick taps: the Bundle is shorter than 910 ms, but plays to its end
-  const ok = turns.length === 3 && across.length === 1 && last?.of === MAX_SHEETS && last.how === "landed";
+  const ok = turns.length === 3 && across.length === 1 && last?.sheets === MAX_SHEETS && last.how === "landed";
   check("Page Down, Page Up, End", "the page in the air lands at once", describe(turns, flights), ok);
   s.key(VK_HOME);
   await s.collect();
@@ -326,6 +352,7 @@ export async function testit(): Promise<void> {
   await withBook("facing", BOOK800, "facing", async (s) => {
     await homeEnd(s);
     await splitLastSheet(s);
+    await readOnAfterHome(s);
     await jumpAcross(s);
     await rhythm(s);
   });

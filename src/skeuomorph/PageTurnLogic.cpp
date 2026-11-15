@@ -317,6 +317,7 @@ Sheets SheetsOf(TurnKind kind, int pages, int leaves, float pageWidthPx) {
         return s;
     }
     s.px = BundlePx(pages);
+    s.leaves = std::max(leaves, 1);
     s.n = std::min(BundleSheets(s.px), std::max(leaves, kMinSheets));
     s.stiff = kBundleStiff * std::min(1.0f, s.px / kStiffFullPx);
     s.gap = s.px / (s.n - 1);
@@ -371,6 +372,16 @@ float EdgesOffTarget(int fromPx, int toPx, float done, bool back) {
         return (toPx - fromPx) * done;
     }
     return (fromPx - toPx) * (1 - done);
+}
+
+// sheets of a Bundle that go back once taps the other way turned back peeled
+// of its leaves: their share of the sheets, at least one, all once every leaf is
+int SheetsBack(const Sheets& s, int peeled) {
+    if (peeled <= 0 || s.n <= 1) {
+        return 0;
+    }
+    int back = (s.n * peeled + s.leaves - 1) / s.leaves;
+    return ClampI(back, 1, s.n);
 }
 
 PageRange TurnedPages(Spread from, Spread to) {
@@ -497,7 +508,7 @@ void TurnClock::Advance(i64 nowMs, Landed* landed) {
     for (int i = 0; i < nAir; i++) {
         Flight f = air[i];
         f.progress += (float)dt / std::max(LengthMs(f.kind, nowMs), 1);
-        if (f.progress >= 1 - kLandEps) {
+        if (f.progress >= 1 - kLandEps && nowMs >= f.holdUntil) {
             AddLanded(landed, f.id);
             continue;
         }
@@ -539,6 +550,7 @@ int TurnClock::Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Sheets sh
     f.kind = kind;
     f.from = from;
     f.to = to;
+    f.dest = to;
     f.sheets = sheets;
     air[nAir++] = f;
     return f.id;
@@ -571,44 +583,53 @@ int TurnClock::Reverse(i64 nowMs, Spread from, Spread to, Landed* landed) {
     return 0;
 }
 
-// a tap the other way, one Spread back from where a Bundle in the air heads,
-// splits off the Bundle's last sheet: a page going back from where it is, so
-// the next back tap passes over it to the Bundle. Counts as a tap. Returns the
-// page's id and the Bundle's; 0: no such Bundle
-int TurnClock::Split(i64 nowMs, Spread from, Spread to, Landed* landed, int* bundleId) {
+// a tap the other way, from where the newest Bundle in the air now heads,
+// turns its last leaf back: the Bundle stays one turn, its trailing sheets
+// going back from where they are (SheetsBack). Down to where it started; past
+// that the tap is a turn of its own. A tap its own way again sends the last
+// leaf turned back on, up to where it first headed. Counts as a tap and keeps
+// the Bundle in the air until the sheets going back are home. Returns the
+// Bundle's id; 0: no such Bundle
+int TurnClock::Split(i64 nowMs, Spread from, Spread to, Landed* landed) {
     Advance(nowMs, landed);
     int i = nAir - 1;
     while (i >= 0 && air[i].back) {
         i--;
     }
-    if (i < 0) {
+    if (i < 0 || air[i].kind != TurnKind::Bundle || !SameSpread(air[i].to, from)) {
         return 0;
     }
     Flight& b = air[i];
-    bool bundleOn = b.to.first > b.from.first;
+    bool bundleOn = b.dest.first > b.from.first;
     bool tapOn = to.first > from.first;
-    bool inside = bundleOn ? to.first > b.from.first : to.first < b.from.first;
-    if (b.kind != TurnKind::Bundle || !SameSpread(b.to, from) || bundleOn == tapOn || !inside) {
-        return 0;
+    if (bundleOn != tapOn) {
+        bool inside = bundleOn ? to.first >= b.from.first : to.first <= b.from.first;
+        if (!inside) {
+            return 0;
+        }
+        b.peeled++;
+    } else {
+        bool inside = bundleOn ? to.first <= b.dest.first : to.first >= b.dest.first;
+        if (b.peeled == 0 || !inside) {
+            return 0;
+        }
+        b.peeled--;
     }
 
     Tap(nowMs);
-    int last = std::max(b.sheets.n - 1 - b.splitOff, 0);
-    Flight f;
-    f.id = nextId++;
-    f.kind = TurnKind::Curl;
-    f.from = from;
-    f.to = to;
-    f.back = true;
-    f.progress = 1 - SheetT(b.sheets, b.progress, last);
     b.to = to;
-    b.splitOff = std::min(b.splitOff + 1, b.sheets.n - 1);
-    *bundleId = b.id;
-    if (nAir == kMaxInAir) {
-        LandFirst(landed);
+    b.holdUntil = nowMs + LengthMs(b.kind, nowMs);
+    return b.id;
+}
+
+// leaves of Bundle id turned back
+int TurnClock::Peeled(int id) const {
+    for (int i = 0; i < nAir; i++) {
+        if (air[i].id == id) {
+            return air[i].peeled;
+        }
     }
-    air[nAir++] = f;
-    return f.id;
+    return 0;
 }
 
 void TurnClock::LandAll(Landed* landed) {

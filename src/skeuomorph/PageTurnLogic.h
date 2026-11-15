@@ -159,6 +159,7 @@ struct Sheets {
     float lag = 0;   // each sheet starts this share of the turn after the one above
     float stiff = 0; // 0 .. kBundleStiff
     float gap = 0;   // px between neighbouring sheets while lifted
+    int leaves = 1;  // leaves turned over: a back tap turns n / leaves sheets back
 };
 
 // how high a sheet lies over the page while lifted, and how much wider it
@@ -184,6 +185,7 @@ float LeadFactor(const Sheets& s);
 float EdgesDepart(const Sheets& s, float t);
 float EdgesArrive(float t);
 float EdgesOffTarget(int fromPx, int toPx, float done, bool back);
+int SheetsBack(const Sheets& s, int peeled);
 PageRange TurnedPages(Spread from, Spread to);
 bool Overlaps(PageRange a, PageRange b);
 
@@ -213,7 +215,8 @@ class TurnClock {
     int Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Landed* landed);
     int Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Sheets sheets, Landed* landed, Landed* across);
     int Reverse(i64 nowMs, Spread from, Spread to, Landed* landed);
-    int Split(i64 nowMs, Spread from, Spread to, Landed* landed, int* bundleId);
+    int Split(i64 nowMs, Spread from, Spread to, Landed* landed);
+    int Peeled(int id) const;
     void Advance(i64 nowMs, Landed* landed);
     void LandAll(Landed* landed);
     int CurlMs(i64 nowMs) const;
@@ -232,7 +235,9 @@ class TurnClock {
         Spread to;
         bool back = false;
         Sheets sheets;
-        int splitOff = 0; // sheets split off its bottom
+        Spread dest;       // where it first headed
+        int peeled = 0;    // leaves turned back by taps the other way
+        i64 holdUntil = 0; // turned-back sheets are home by then
     };
     void Tap(i64 nowMs);
     void LandFirst(Landed* landed);

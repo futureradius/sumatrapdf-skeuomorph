@@ -166,7 +166,7 @@ struct TurnData {
     Sheets sheets;
     int firstPage = 0;
     int splitOf = 0;
-    float splitT = 0;
+    int peeled = 0;
     Landed across;
     int dpi = 0;
     Pace pace;
@@ -854,8 +854,12 @@ struct Flight {
     CurlPicture toPic;   // sent back: the new Spread, whole canvas
     bool back = false;   // sent back: heading to where it started
     Sheets sheets;       // a Curl: one; a Bundle: 2-14
-    int splitOff = 0;    // sheets back taps split off its bottom
-    float t = 0;         // time progress, 0 .. EndT
+    // a Bundle that taps the other way turned partly back: per sheet, 0 on
+    // with the Bundle, -1 back from where it was, +1 on again; ownT its progress
+    signed char dir[kMaxSheets] = {};
+    float ownT[kMaxSheets] = {};
+    int peeled = 0; // leaves turned back
+    float t = 0;    // time progress, 0 .. EndT
     double advancedAt = 0;
     bool showsNew = false;
     bool seeThrough = false;
@@ -1082,8 +1086,9 @@ struct SheetPlace {
     Sheets sheets;
     int fromTop = 0;
     float shadow = 1; // strength; 0: casts none
-    RectF start;      // flat before the turn
-    RectF end;        // and after it, mirrored over the spine
+    const CurlPicture* turnedPic = nullptr;
+    RectF start; // flat before the turn
+    RectF end;   // and after it, mirrored over the spine
     float spineX = 0;
     float dirX = 1;
     Fade fade = Fade::None;
@@ -1152,27 +1157,48 @@ static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, floa
     }
 }
 
-static int BottomSheet(const Flight& f) {
-    return std::max(f.sheets.n - 1 - f.splitOff, 0);
+// a sheet of a Bundle: on with the Bundle, or turned by taps (back from where
+// it was, or on again)
+static float SheetTNow(const Flight& f, int k) {
+    if (f.dir[k] != 0) {
+        return f.ownT[k];
+    }
+    return SheetT(f.sheets, std::min(f.t, 1.0f), k);
 }
 
-static int ShadowCasters(const Flight& f) {
-    return BottomSheet(f) > 0 ? 2 : 1;
+static bool GoesBack(const Flight& f, int k) {
+    return f.dir[k] < 0;
 }
 
-// sheet k of a Bundle: only the top one shows the old page, only the bottom
-// one the landing page; the ones between are blank paper
+// sheet k of a Bundle: the top one shows the old page, the last one landing
+// the landing page; the ones between are blank paper. Once taps turned some
+// back, the page SumatraPDF shows lies on top of each side: the last sheet
+// landing shows it on its back, the first going back on its front
 static SheetPlace SheetOfStack(const SheetPlace& place, const Flight& f, int k) {
-    int bottom = BottomSheet(f);
+    int n = f.sheets.n;
     SheetPlace sp = place;
     sp.sheets = f.sheets;
     sp.fromTop = k;
-    if (bottom == 0) {
+    if (n == 1) {
         return sp;
     }
+    int lastOn = -1;
+    int firstBack = n;
+    for (int i = 0; i < n; i++) {
+        if (GoesBack(f, i)) {
+            firstBack = std::min(firstBack, i);
+        } else {
+            lastOn = i;
+        }
+    }
+    bool turned = firstBack < n || f.peeled;
     sp.front = k == 0 ? place.front : nullptr;
-    sp.back = k == bottom ? place.back : nullptr;
-    sp.shadow = k == 0 || k == bottom ? kBundleShadow : 0;
+    sp.back = !turned && k == n - 1 ? place.back : nullptr;
+    if (turned) {
+        sp.front = k == firstBack ? place.turnedPic : sp.front;
+        sp.back = k == lastOn ? place.turnedPic : nullptr;
+    }
+    sp.shadow = k == 0 || k == n - 1 ? kBundleShadow : 0;
     return sp;
 }
 
@@ -1189,13 +1215,11 @@ static RectF LerpRectF(RectF a, RectF b, float f) {
 // of different sizes, the sheets between step evenly from the top page's
 // size to the bottom one's
 static void DrawStack(Gpu& g, const Flight& f, const SheetPlace& place, Rect clip, bool stepped = false) {
-    int bottom = BottomSheet(f);
-    float t = std::min(f.t, 1.0f);
-    if (bottom == 0 && f.sheets.n == 1) {
-        DrawSheetAt(g, f.turn, place, t, clip);
+    int n = f.sheets.n;
+    if (n == 1) {
+        DrawSheetAt(g, f.turn, place, std::min(f.t, 1.0f), clip);
         return;
     }
-    int n = bottom + 1;
     auto sheetAt = [&](int k) {
         SheetPlace sp = SheetOfStack(place, f, k);
         if (stepped) {
@@ -1204,21 +1228,18 @@ static void DrawStack(Gpu& g, const Flight& f, const SheetPlace& place, Rect cli
         }
         return sp;
     };
-    for (int k : {0, bottom}) {
-        DrawSheetAt(g, f.turn, sheetAt(k), SheetT(f.sheets, t, k), clip, Pass::Shadow);
-        if (bottom == 0) {
-            break;
-        }
+    for (int k : {0, n - 1}) {
+        DrawSheetAt(g, f.turn, sheetAt(k), SheetTNow(f, k), clip, Pass::Shadow);
     }
-    for (int k = 0; k <= bottom; k++) {
-        DrawSheetAt(g, f.turn, sheetAt(k), SheetT(f.sheets, t, k), clip, Pass::Sheet);
+    for (int k = 0; k < n; k++) {
+        DrawSheetAt(g, f.turn, sheetAt(k), SheetTNow(f, k), clip, Pass::Sheet);
     }
 }
 
 // the sheet where the screen copies have it: the view doesn't move. A Bundle
-// that had sheets split off lands on the page SumatraPDF shows under the
-// split-off sheet: splitLanding, that sheet's copy of the whole screen
-static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, const CurlPicture* splitLanding, Rect clip,
+// that taps turned partly back shows on top of each side the page SumatraPDF
+// shows: turnedPic, the whole screen copied after the last such tap
+static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, const CurlPicture* turnedPic, Rect clip,
                       int shadowCopies) {
     const Geometry& geo = f.geo;
     if (geo.start.IsEmpty() || geo.end.IsEmpty()) {
@@ -1232,7 +1253,8 @@ static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, const CurlPic
     sp.dirX = geo.dirX;
     sp.fade = geo.fade;
     sp.front = FacePicture(f, next, geo.startFace);
-    sp.back = f.splitOff > 0 ? splitLanding : FacePicture(f, next, geo.endFace);
+    sp.back = FacePicture(f, next, geo.endFace);
+    sp.turnedPic = turnedPic;
     sp.frontSrc = sp.start;
     sp.backSrc = sp.end;
     sp.paperBelow[0] = geo.paperBelow[0];
@@ -1487,8 +1509,19 @@ static float EndT(const Flight& f) {
 }
 
 // landed, or back where it started
+// sheets taps turned are home: back where they lifted, or landed
+static bool TurnedHome(const Flight& f) {
+    for (int k = 0; k < f.sheets.n; k++) {
+        bool home = f.dir[k] < 0 ? f.ownT[k] <= 0 : f.dir[k] == 0 || f.ownT[k] >= 1;
+        if (!home) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool AtRest(const Flight& f) {
-    return f.back ? f.t <= 0 : f.t >= EndT(f);
+    return f.back ? f.t <= 0 : f.t >= EndT(f) && TurnedHome(f);
 }
 
 // one Curl at rest, before the layer goes: what SumatraPDF shows (or will),
@@ -1517,8 +1550,21 @@ static void RenderRest(Gpu& g, const Flight& f) {
     }
 }
 
+// taps the other way turned every sheet of this Bundle back: it now heads
+// home, the way the next page turns
+static bool AllBack(const Flight& f) {
+    for (int k = 0; k < f.sheets.n; k++) {
+        if (!GoesBack(f, k)) {
+            return false;
+        }
+    }
+    return f.sheets.n > 1;
+}
+
+// the side its sheets come to lie on
 static int EndSideOf(const Flight& f) {
-    return f.geo.dirX > 0 ? kLeft : kRight;
+    bool toLeft = f.geo.dirX > 0;
+    return toLeft != AllBack(f) ? kLeft : kRight;
 }
 
 // what lies under the sheets, per side: the old screen of the oldest turn
@@ -1549,7 +1595,7 @@ static void DrawBottom(Gpu& g, const Stage& st) {
         }
         for (const Flight* f : lands) {
             if (f) {
-                DrawFlat(g, f->turn, f->geo.stays, f->oldPic);
+                DrawFlat(g, f->turn, AllBack(*f) ? f->geo.start : f->geo.stays, f->oldPic);
             }
         }
         return;
@@ -1586,7 +1632,7 @@ static void DrawSheets(Gpu& g, const Stage& st) {
     const CurlPicture* splitLanding = SplitLanding(st);
     int casters = 0;
     for (const Flight* f : st.flights) {
-        casters += ShadowCasters(*f);
+        casters += f->sheets.n > 1 ? 2 : 1;
     }
     int copies = std::max(kMinShadowCopies, kShadowCopies / casters);
     if (n == 1) {
@@ -1833,11 +1879,14 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
         what = StrL("sent back");
     }
     double covered = tm.covered > 0 ? tm.covered - tm.start : -1;
-    // a Bundle: ", 14 sheets" (", 13 of 14 sheets" with one split off)
+    // a Bundle: ", 14 sheets" (", 14 sheets, 3 back" when taps turned 3 back)
     TempStr sheets = StrL("");
     if (f.sheets.n > 1) {
-        int drawn = BottomSheet(f) + 1;
-        sheets = drawn == f.sheets.n ? fmt(", %d sheets", drawn) : fmt(", %d of %d sheets", drawn, f.sheets.n);
+        int back = 0;
+        for (int k = 0; k < f.sheets.n; k++) {
+            back += GoesBack(f, k) ? 1 : 0;
+        }
+        sheets = back == 0 ? fmt(", %d sheets", f.sheets.n) : fmt(", %d sheets, %d back", f.sheets.n, back);
     }
     TempStr line =
         fmt("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms%s\n", tm.id,
@@ -1933,6 +1982,16 @@ static bool SameWay(const TurnData& a, const TurnData& b) {
     return a.shape == b.shape && a.sweep == b.sweep && a.forward == b.forward;
 }
 
+// a turn the next one shares the air with: the same way, or a Bundle whose
+// sheets all go back, the way the next one turns
+static bool FliesWith(const Flight& f, const TurnData& next) {
+    if (SameWay(f.turn, next)) {
+        return true;
+    }
+    bool opposite = f.turn.shape == next.shape && f.turn.sweep != next.sweep && f.turn.forward != next.forward;
+    return opposite && AllBack(f);
+}
+
 // sent back (or on again) from where it is. Heading back, SumatraPDF shows the
 // old Spread: the new one comes from this tap's copy. New times, new id
 static void SendBack(Renderer* r, Gpu& g, Stage& st, Flight& f, const TurnData& turn) {
@@ -1968,6 +2027,44 @@ static Flight* FindFlight(Stage& st, int clockId) {
     return nullptr;
 }
 
+// taps the other way turned peeled of a Bundle's leaves back: as many of its
+// sheets turn back from where they are, from its last sheet up; fewer, and
+// the last ones turned back go on again. Like SendBack, the tap's cover
+// hand-off rides on this Bundle
+static void Peel(Gpu& g, Stage& st, Flight& f, const TurnData& turn) {
+    int n = f.sheets.n;
+    int want = SheetsBack(f.sheets, turn.peeled);
+    int back = 0;
+    for (int k = 0; k < n; k++) {
+        back += GoesBack(f, k) ? 1 : 0;
+    }
+    for (int k = n - 1; k >= 0 && back < want; k--) {
+        if (!GoesBack(f, k)) {
+            f.ownT[k] = SheetTNow(f, k);
+            f.dir[k] = -1;
+            back++;
+        }
+    }
+    for (int k = 0; k < n && back > want; k++) {
+        if (GoesBack(f, k)) {
+            f.dir[k] = 1;
+            back--;
+        }
+    }
+    f.peeled = turn.peeled;
+    f.turn.id = turn.id;
+    f.turn.t0 = turn.t0;
+    f.turn.splitOf = turn.splitOf;
+    f.turn.to.edgesLeft = turn.to.edgesLeft;
+    f.turn.to.edgesRight = turn.to.edgesRight;
+    f.showsNew = false;
+    f.seeThrough = false;
+    f.refreshesLeft = -1;
+    f.restShown = false;
+    g.inbox[kSlotNextOld].ok = false;
+    st.needCover = turn.id;
+}
+
 // every tap starts its own Curl or Bundle, from the old Spread copied at the
 // tap. Only turns the same way share the air (and sheets split off a Bundle,
 // going back), a glide flies alone, and past 5 the oldest lands at once. So
@@ -1978,6 +2075,12 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     if (sent) {
         st.lastStart = turn.id;
         SendBack(r, g, st, *sent, turn);
+        return;
+    }
+    Flight* bundle = turn.splitOf ? FindFlight(st, turn.splitOf) : nullptr;
+    if (bundle) {
+        st.lastStart = turn.id;
+        Peel(g, st, *bundle, turn);
         return;
     }
 
@@ -1999,19 +2102,13 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     // the swap chain follows the canvas; its buffers are undefined until the next Present
     Size size = turn.canvas;
     bool resize = !size.IsEmpty() && !(size == CurlLayerSize(g.layer));
-    Flight* bundle = turn.splitOf ? FindFlight(st, turn.splitOf) : nullptr;
     if (len(st.flights) > 0) {
         const Flight& last = *VecLast(st.flights);
-        bool sameWay = bundle || SameWay(st.flights[0]->turn, turn);
-        if (resize || last.glide.on || GlideOf(turn).on || !sameWay) {
+        if (resize || last.glide.on || GlideOf(turn).on || !FliesWith(last, turn)) {
             LandAll(r, g, st, LandHow::AtOnce, "next Curl");
-            bundle = nullptr;
         }
     }
     if (len(st.flights) >= kMaxInAir) {
-        if (st.flights[0] == bundle) {
-            bundle = nullptr;
-        }
         Finish(r, g, st, 0, LandHow::AtOnce, "sixth Curl");
     }
     if (resize) {
@@ -2036,17 +2133,6 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     f->glide = GlideOf(turn);
     f->sheets = turn.sheets;
     f->advancedAt = turn.t0;
-    // split off the Bundle's bottom: it goes back from where that sheet is,
-    // and the Bundle now lands on the page this one lifts off
-    if (bundle) {
-        float bt = std::min(bundle->t, 1.0f);
-        f->t = 1 - SheetT(bundle->sheets, bt, BottomSheet(*bundle));
-        bundle->splitOff = std::min(bundle->splitOff + 1, bundle->sheets.n - 1);
-        bundle->turn.to.edgesLeft = turn.to.edgesLeft;
-        bundle->turn.to.edgesRight = turn.to.edgesRight;
-    } else if (turn.splitOf) {
-        f->t = turn.splitT;
-    }
     f->refreshMs = RefreshMs(r->hwnd);
     f->times.id = turn.id;
     f->times.start = turn.t0;
@@ -2118,6 +2204,9 @@ static void Advance(Stage& st, double now) {
         }
         float step = (float)(dt / lenMs);
         f->t = f->back ? std::max(0.0f, f->t - step) : std::min(EndT(*f), f->t + step);
+        for (int k = 0; k < f->sheets.n; k++) {
+            f->ownT[k] = std::clamp(f->ownT[k] + f->dir[k] * step, 0.0f, 1.0f);
+        }
     }
 }
 
@@ -2546,7 +2635,7 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     t.sheets = turn.sheets;
     t.firstPage = turn.firstPage;
     t.splitOf = turn.splitOf;
-    t.splitT = turn.splitT;
+    t.peeled = turn.peeled;
     t.across = turn.across;
     t.dpi = turn.dpi;
     t.pace = turn.pace;

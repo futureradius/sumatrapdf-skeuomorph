@@ -42,8 +42,8 @@ struct CurlTurn {
     pageturn::TurnKind kind = pageturn::TurnKind::Curl;
     pageturn::Sheets sheets;
     int firstPage = 0;       // the first page it turns over: orders sheets as in a book
-    int splitOf = 0;         // a back tap split this Curl off the Bundle splitOf's bottom
-    float splitT = 0;        // where the clock has it, if that Bundle is gone
+    int splitOf = 0;         // a tap the other way turns back leaves of Bundle splitOf: no new Curl
+    int peeled = 0;          // its leaves turned back so far
     pageturn::Landed across; // turns in the air whose pages this one crosses: they land at once
     int dpi = 0;
     pageturn::Pace pace;
