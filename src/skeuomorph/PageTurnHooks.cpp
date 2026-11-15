@@ -34,7 +34,7 @@ void PageTurnBeforeSpread(MainWindow* win, DisplayModel* dm, int pageNo) {
 
 // hook 4: room for Page Edges and the cover flag; zoom, rotation & co. land Curls
 void PageTurnBeforeRelayout(MainWindow* win, DisplayModel* dm) {
-    DetectBeforeRelayout(win);
+    DetectBeforeRelayout(win, dm);
     EdgesBeforeRelayout(dm);
 }
 

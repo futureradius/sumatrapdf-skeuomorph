@@ -12,3 +12,4 @@ void EdgesRelayoutAll();
 void EdgesPaint(HDC hdc, DisplayModel* dm);
 int EdgesRoomOnScreen(DisplayModel* dm);
 void EdgesOnScreen(DisplayModel* dm, int* left, int* right);
+Color EdgeColumnColor(int col, int thick, int dpi, Color paper);

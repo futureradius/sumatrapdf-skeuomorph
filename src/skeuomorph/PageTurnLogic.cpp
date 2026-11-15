@@ -110,6 +110,15 @@ Skip FingerprintSkip(const Fingerprint& atHook, const Fingerprint& atPaint) {
     return Skip::Relayout;
 }
 
+// the same document and view, only laid out anew (EPUB): turns in the air keep flying
+bool OnlyRenumbered(const Fingerprint& atHook, const Fingerprint& atPaint) {
+    if (atHook == atPaint || atHook.dm == 0 || atHook.dm != atPaint.dm) {
+        return false;
+    }
+    return atHook.displayMode == atPaint.displayMode && atHook.inPresentation == atPaint.inPresentation &&
+           atHook.facingStepOne == atPaint.facingStepOne && atHook.r2l == atPaint.r2l;
+}
+
 // spec 5.3 "don't animate"; the missing layer comes last so the log still says
 // why a turn would be skipped while Curls can't play
 Skip CheckGate(const TurnGate& gate) {
@@ -290,6 +299,102 @@ int BundleSheets(float bundlePx) {
     return ClampI(n, kMinSheets, kMaxSheets);
 }
 
+float EaseInOut(float t) {
+    return 0.5f - 0.5f * cosf(3.14159265f * t);
+}
+
+float Smooth(float a, float b, float x) {
+    x = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return x * x * (3 - 2 * x);
+}
+
+// prototype's flightGeom(): never more sheets than leaves turned. Each sheet
+// lags the one above by its share of the thickness over the page width, plus
+// the fan; pageWidthPx 0 (not known): the fan alone
+Sheets SheetsOf(TurnKind kind, int pages, int leaves, float pageWidthPx) {
+    Sheets s;
+    if (kind != TurnKind::Bundle) {
+        return s;
+    }
+    s.px = BundlePx(pages);
+    s.n = std::min(BundleSheets(s.px), std::max(leaves, kMinSheets));
+    s.stiff = kBundleStiff * std::min(1.0f, s.px / kStiffFullPx);
+    s.gap = s.px / (s.n - 1);
+    s.lag = kBundleFan * 0.45f / (s.n - 1);
+    if (pageWidthPx > 0) {
+        s.lag += s.px / s.n / pageWidthPx * 0.7f;
+    }
+    return s;
+}
+
+// a sheet's own progress at turn progress t; fromTop 0 is the top sheet where
+// the turn starts, which goes first. Every sheet lands at t = 1
+float SheetT(const Sheets& s, float t, int fromTop) {
+    float maxLag = s.lag * (s.n - 1);
+    return std::clamp((t - fromTop * s.lag) / (1 - maxLag), 0.0f, 1.0f);
+}
+
+// p: the sheet's eased progress. The stack opens up over its first 8% and
+// closes over its last 15%, so it lies flat at both ends
+Lift SheetLift(const Sheets& s, float p, int fromTop) {
+    float g = s.gap * Smooth(0, 0.08f, p) * (1 - Smooth(0.85f, 1, p));
+    Lift l;
+    l.base = (s.n - 1 - fromTop) * g;
+    l.radius = fromTop * g;
+    return l;
+}
+
+// a thick Bundle bends in a wider roll and its corner leads less
+float RadiusFactor(const Sheets& s) {
+    return 1 + kStiffRadius * s.stiff;
+}
+
+float LeadFactor(const Sheets& s) {
+    return 1 - s.stiff;
+}
+
+// share of the turn's pages gone from the start side's Page Edges at t
+float EdgesDepart(const Sheets& s, float t) {
+    return Smooth(kDepartFrom, kDepartTo, EaseInOut(SheetT(s, t, s.n - 1)));
+}
+
+// share arrived on the end side's
+float EdgesArrive(float t) {
+    return Smooth(kArriveFrom, 1, t);
+}
+
+// one side's Page Edges, px, a turn in the air still adds to what SumatraPDF
+// shows once everything lands. done: EdgesDepart / EdgesArrive. Heading back,
+// the turn ends where it came from
+float EdgesOffTarget(int fromPx, int toPx, float done, bool back) {
+    if (back) {
+        return (toPx - fromPx) * done;
+    }
+    return (fromPx - toPx) * (1 - done);
+}
+
+PageRange TurnedPages(Spread from, Spread to) {
+    PageRange r;
+    if (from.first <= 0 || to.first <= 0 || from.first == to.first) {
+        return r;
+    }
+    if (to.first > from.first) {
+        r.lo = from.last;
+        r.hi = to.first - 1;
+    } else {
+        r.lo = to.last;
+        r.hi = from.first - 1;
+    }
+    return r;
+}
+
+bool Overlaps(PageRange a, PageRange b) {
+    if (a.lo > a.hi || b.lo > b.hi) {
+        return false;
+    }
+    return a.lo <= b.hi && b.lo <= a.hi;
+}
+
 static void AddLanded(Landed* landed, int id) {
     if (!landed || landed->n >= (int)dimof(landed->ids)) {
         return;
@@ -364,15 +469,19 @@ void TurnClock::Tap(i64 nowMs) {
     lastTapMs = nowMs;
 }
 
-void TurnClock::LandFirst(Landed* landed) {
-    if (nAir == 0) {
+void TurnClock::LandAt(int i, Landed* landed) {
+    if (i < 0 || i >= nAir) {
         return;
     }
-    AddLanded(landed, air[0].id);
-    for (int i = 1; i < nAir; i++) {
-        air[i - 1] = air[i];
+    AddLanded(landed, air[i].id);
+    for (int j = i + 1; j < nAir; j++) {
+        air[j - 1] = air[j];
     }
     nAir--;
+}
+
+void TurnClock::LandFirst(Landed* landed) {
+    LandAt(0, landed);
 }
 
 // moves every turn in the air on to nowMs at the current lengths, so a turn
@@ -404,11 +513,24 @@ int TurnClock::Start(i64 nowMs, TurnKind kind, Landed* landed) {
 }
 
 int TurnClock::Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Landed* landed) {
+    return Start(nowMs, kind, from, to, Sheets(), landed, nullptr);
+}
+
+// across: turns in the air whose pages this one crosses, landed at once
+int TurnClock::Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Sheets sheets, Landed* landed, Landed* across) {
     Advance(nowMs, landed);
+    ResetLanded(across);
     if (kind == TurnKind::Nothing) {
         return 0;
     }
     Tap(nowMs);
+    PageRange turned = TurnedPages(from, to);
+    for (int i = nAir - 1; i >= 0; i--) {
+        if (Overlaps(turned, TurnedPages(air[i].from, air[i].to))) {
+            AddLanded(across, air[i].id);
+            LandAt(i, landed);
+        }
+    }
     if (nAir == kMaxInAir) {
         LandFirst(landed);
     }
@@ -417,6 +539,7 @@ int TurnClock::Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Landed* l
     f.kind = kind;
     f.from = from;
     f.to = to;
+    f.sheets = sheets;
     air[nAir++] = f;
     return f.id;
 }
@@ -446,6 +569,46 @@ int TurnClock::Reverse(i64 nowMs, Spread from, Spread to, Landed* landed) {
         }
     }
     return 0;
+}
+
+// a tap the other way, one Spread back from where a Bundle in the air heads,
+// splits off the Bundle's last sheet: a page going back from where it is, so
+// the next back tap passes over it to the Bundle. Counts as a tap. Returns the
+// page's id and the Bundle's; 0: no such Bundle
+int TurnClock::Split(i64 nowMs, Spread from, Spread to, Landed* landed, int* bundleId) {
+    Advance(nowMs, landed);
+    int i = nAir - 1;
+    while (i >= 0 && air[i].back) {
+        i--;
+    }
+    if (i < 0) {
+        return 0;
+    }
+    Flight& b = air[i];
+    bool bundleOn = b.to.first > b.from.first;
+    bool tapOn = to.first > from.first;
+    bool inside = bundleOn ? to.first > b.from.first : to.first < b.from.first;
+    if (b.kind != TurnKind::Bundle || !SameSpread(b.to, from) || bundleOn == tapOn || !inside) {
+        return 0;
+    }
+
+    Tap(nowMs);
+    int last = std::max(b.sheets.n - 1 - b.splitOff, 0);
+    Flight f;
+    f.id = nextId++;
+    f.kind = TurnKind::Curl;
+    f.from = from;
+    f.to = to;
+    f.back = true;
+    f.progress = 1 - SheetT(b.sheets, b.progress, last);
+    b.to = to;
+    b.splitOff = std::min(b.splitOff + 1, b.sheets.n - 1);
+    *bundleId = b.id;
+    if (nAir == kMaxInAir) {
+        LandFirst(landed);
+    }
+    air[nAir++] = f;
+    return f.id;
 }
 
 void TurnClock::LandAll(Landed* landed) {

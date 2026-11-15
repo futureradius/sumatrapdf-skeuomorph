@@ -9,6 +9,8 @@
 // mode 4: background over rect: texFront's column backdropX at the same height, else its row backdropY
 // mode 5: texFront's frontSrc stretched over rect, smooth; see-through by
 //         1 - alpha outside keep (pages of different sizes in a moving view)
+// mode 6: Page Edges over rect: column colours from texFront's row 0 (left
+//         side) or 1 (right), column 0 beside the page edge at stack.z
 //
 // The sheet lies flat on the start side of the spine before the turn and on
 // the other side after it, mirrored. Its outline changes from startRect to
@@ -40,6 +42,11 @@ cbuffer CB : register(b0) {
     float4 frontSrc; // canvas rect in texFront the front face (mode 5: rect) shows
     float4 backSrc;  // and in texBack, the back face
     float4 keep;     // mode 5: opaque inside this canvas rect; w = 0: none
+    // a Bundle's sheet: x lift over the page, px; y, z depth nudge lying on
+    // the start side, on the end side (which sheet is on top); w tint
+    float4 look;
+    // x: darkening along a Bundle sheet's free edge; z, w: mode 6 page edge x, side (+1 right)
+    float4 stack;
 };
 Texture2D texFront : register(t0);
 Texture2D texBack : register(t1);
@@ -53,6 +60,8 @@ struct VSOut {
     float2 atEnd : TEXCOORD2;   // and in the end face's
     float height : TEXCOORD3;   // shadow: how high the paper casting it is
     float reach : TEXCOORD4;    // spine to the sheet's outer edge
+    float u : TEXCOORD5;        // 0 at the sheet's spine edge .. 1 at its free edge
+    float band : TEXCOORD6;     // u where the free edge's dark band starts
 };
 
 static const float kPi = 3.14159265;
@@ -63,19 +72,25 @@ static const float2 kShadowPush = float2(0.22, 0.28);
 static const float kShadowGrow = 0.035;
 
 // the camera looks straight down at the view's centre; paper on the page
-// plane (z = 0) lands on exact pixels, lifted paper grows a little
-float4 Project(float3 P) {
+// plane (z = 0) lands on exact pixels, lifted paper grows a little. nudge
+// only moves the depth: sheets lying on each other keep their order
+float4 Project(float3 P, float nudge) {
     float2 c = viewSize * 0.5;
     float w = (camDist - P.z) / camDist;
     float2 s = c + (P.xy - c) / w;
     float2 ndc = float2(s.x / viewSize.x * 2 - 1, 1 - s.y / viewSize.y * 2);
-    return float4(ndc * w, saturate(0.5 - P.z * kDepthPerPx) * w, w);
+    return float4(ndc * w, saturate(0.5 - (P.z + nudge) * kDepthPerPx) * w, w);
+}
+
+float4 Project(float3 P) {
+    return Project(P, 0);
 }
 
 struct Bent {
     float3 P;
     float3 N;
     float reach;
+    float wrap; // 0 flat where it started .. 1 over on the other side
 };
 
 // the sheet's outline now (pages of different sizes change shape), frame units
@@ -121,17 +136,21 @@ Bent Bend(Sheet s, float2 uv) {
     float halfTurn = kPi * radius;
     float3 P = float3(q, 0);
     float3 N = float3(0, 0, 1);
+    float wrap = 0;
     if (d > 0 && d < halfTurn) {
         float a = d / radius;
         P = float3(q + n * (radius * sin(a) - d), radius * (1 - cos(a)));
         N = float3(-n * sin(a), cos(a));
+        wrap = d / halfTurn;
     } else if (d >= halfTurn) {
         P = float3(q - n * (2 * d - halfTurn), 2 * radius);
         N = float3(0, 0, -1);
+        wrap = 1;
     }
 
     Bent b;
-    b.P = float3(spineX + dirX * P.x, s.top + s.h - P.y, P.z);
+    b.wrap = wrap;
+    b.P = float3(spineX + dirX * P.x, s.top + s.h - P.y, P.z + look.x);
     b.N = float3(dirX * N.x, -N.y, N.z);
     b.reach = s.gap + s.w;
     return b;
@@ -144,7 +163,9 @@ VSOut VS(float2 uv : TEXCOORD0) {
     o.atEnd = 0;
     o.height = 0;
     o.reach = 1;
-    if (mode == 0 || mode == 2 || mode == 4 || mode == 5) {
+    o.u = 0;
+    o.band = 2;
+    if (mode == 0 || mode == 2 || mode == 4 || mode == 5 || mode == 6) {
         o.world = float3(rect.xy + uv * rect.zw, 0);
         o.pos = Project(o.world);
         return o;
@@ -166,7 +187,9 @@ VSOut VS(float2 uv : TEXCOORD0) {
 
     o.world = b.P;
     o.nrm = b.N;
-    o.pos = Project(b.P);
+    o.pos = Project(b.P, lerp(look.y, look.z, b.wrap));
+    o.u = uv.x;
+    o.band = 1 - 2.2 / max(sheet.w, 1);
     float sx = dirX > 0 ? frontSrc.x + uv.x * frontSrc.z : frontSrc.x + (1 - uv.x) * frontSrc.z;
     float ex = dirX > 0 ? backSrc.x + (1 - uv.x) * backSrc.z : backSrc.x + uv.x * backSrc.z;
     o.atStart = float2(sx, frontSrc.y + uv.y * frontSrc.w);
@@ -212,6 +235,10 @@ float4 PS(VSOut i) : SV_Target {
         float a = Inside(c, keep) ? 1 : alpha;
         return float4(PictureAt(texFront, frontImg, at) * a, a);
     }
+    if (mode == 6) {
+        float col = stack.w > 0 ? floor(i.pos.x) - stack.z : stack.z - 1 - floor(i.pos.x);
+        return float4(texFront.Load(int3(col, stack.w > 0 ? 1 : 0, 0)).rgb, 1);
+    }
     if (mode == 3) {
         // soft and faint near the page, fading as the paper rises
         float a = shadowAlpha * smoothstep(1.5, i.reach * 0.08, i.height) *
@@ -236,10 +263,14 @@ float4 PS(VSOut i) : SV_Target {
         n = -n;
     }
 
+    // a Bundle's sheets alternate a little in tone, with a darker free edge,
+    // so they read as a stack
+    col *= look.w;
     float3 L = normalize(kLight);
     float diffuse = max(dot(n, L), 0) / L.z;
     float spec = pow(max(dot(n, normalize(L + V)), 0), 50) * (1 - n.z);
     col *= lerp(1, 0.2 + 0.8 * diffuse, shading);
     col = saturate(col + shading * 0.35 * spec);
+    col *= 1 - stack.x * smoothstep(i.band, 1, i.u);
     return float4(col * alpha, alpha);
 }

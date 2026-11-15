@@ -197,7 +197,7 @@ Exact maths: prototype on the throwaway branch `prototype/bundles-edges` (`proto
 
 - **Book View cover:** with the switch on, the lone cover sits right of the spine (left in Right-to-Left Reading), in Presentation mode too. Opening it is a normal Curl.
 - **Lone last page:** the cover's mirror. It sits left of the spine, the right side is empty background, and there's no spine shadow and no unread Page Edges. (Today it's centred in a Paged View; the same layout flag fixes both.)
-- **Spine shadow:** only where there's paper on both sides of the spine. So there's none beside a lone cover or a lone last page. Facing's first Spread keeps it, since page 1 lies on the left. When turning back to the cover, the shadow stays until the turning page has swept over and landed, then fades.
+- **No spine shadow** (decided by the human on 2026-11-15, in build step 7): SumatraPDF leaves a small gap between the pages where the spine would be, which looks cleaner than pages "stuck together" with a shadow. Neither SumatraPDF nor the layer draws one.
 - **The cover lands on a blank slate:** a side with no paper is empty background. The paper under a side appears as its first sheet lands and goes as its last sheet lifts, like opening a real book's cover. A Curl's shadow never falls on empty background.
 
 ([What should Bundles and Page Edges look like?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/9), [What happens at the cover, the last page and other odd cases?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/16))
@@ -205,7 +205,7 @@ Exact maths: prototype on the throwaway branch `prototype/bundles-edges` (`proto
 ### 3.8 Other odd cases
 
 - **Pages of different sizes:** a turning sheet changes shape smoothly from the front page's outline to the back page's.
-- **Wide page alone across both columns** ("landscape as spread", comics and image folders): a picture printed across the spine. Curls fold it at the spine, half per side. Page Edges and spine shadow as usual.
+- **Wide page alone across both columns** ("landscape as spread", comics and image folders): a picture printed across the spine. Curls fold it at the spine, half per side. Page Edges as usual.
 - **EPUB page count changes:** Page Edges snap to the new size. A Bundle in the air keeps its starting size, and the Page Edges correct on landing.
 
 ([What happens at the cover, the last page and other odd cases?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/16))
@@ -451,5 +451,5 @@ Issues are sub-issues of [Build: Skeuomorph Page Turn](https://github.com/future
 | 4. [One plain Curl with no flash](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/30) | Curl layer; drawing thread; precompiled shaders; screen copies; holding the repaint; a simple cylinder Curl, one page at a time; land instantly on window changes; instant jump where the layer can't load; flash recorder | 3.10 (1, 2, 4), 3.11, 5.5, 5.7 | 0 |
 | 5. [The real Curl look](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/31) | corner peel, shadow, shading, 3D depth; backward turns; Single Page fade; right-to-left mirroring; different-size pages changing shape; wide pages folding at the spine | 3.3, 3.8, 3.9 | 0 |
 | 6. [Several Curls at once and fast tapping](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/32) | up to 5 in the air; gap × 4 / 310 ms; backward tap sends a page back; freeing pictures; memory budget; Release speed check | 3.4, 4, 5.5 (memory) | 0 |
-| 7. [Bundles](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/33) | sheets, fan, stiffness; Page Edges shrink and grow (drawn by the layer); splitting the last sheet; a new jump lands pages in the air; spine shadow; the cover's blank slate; EPUB page-count changes | 3.5, 3.6 (moving), 3.7, 3.8 | 0 |
+| 7. [Bundles](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/33) | sheets, fan, stiffness; Page Edges shrink and grow (drawn by the layer); splitting the last sheet; a new jump lands pages in the air; no spine shadow (dropped); the cover's blank slate; EPUB page-count changes | 3.5, 3.6 (moving), 3.7, 3.8 | 0 |
 | 8. [Rough Pages](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/34) | background copy; worker thread; wish list; ~600 px cap; copied colour helpers; image cache emptying; landing on a Rough Page; Release speed check on the test-shelf scans | 3.10, 5.6 | 0 |

@@ -5,8 +5,9 @@
 // SKEUOMORPH_PERF_LOG:
 //   skeuomorph-curl: #3 landed after 702 ms, 42 frames, 0 late, covered 12.8 ms, UI waited 12.1 ms
 // A burst of turns at the usual window size (1638x1000) must show no late
-// frames: single turns, then a riffle and a held key with several Curls in the
-// air (build step 6). A maximized burst is printed too, not judged.
+// frames: single turns, End and Home (Bundles, build step 7), then a riffle and
+// a held key with several Curls in the air (build step 6). A maximized burst
+// is printed too, not judged.
 // Judged only when plugged in: on battery the laptop runs 2-3x slower, so a
 // battery run is printed and noted, not judged.
 //
@@ -31,6 +32,8 @@ const { postMessage, setForegroundWindow, showWindow, sleep, SW_MAXIMIZE, VK_NEX
 const BOOK = "C:\\code\\test-shelf\\generated\\numbered-800-pages.pdf";
 
 const VK_PRIOR = 0x21;
+const VK_END = 0x23;
+const VK_HOME = 0x24;
 const TURNS_FORWARD = 12;
 const TURNS_BACK = 6;
 const SETTLE_MS = 400;
@@ -147,7 +150,8 @@ async function runBurst(size: Size): Promise<Burst> {
     setForegroundWindow(frame);
     await client.waitForRenderIdle();
     await sleep(SETTLE_MS);
-    const keys = [...Array(TURNS_FORWARD).fill(VK_NEXT), ...Array(TURNS_BACK).fill(VK_PRIOR)];
+    // single turns, then a Bundle each way (build step 7)
+    const keys = [...Array(TURNS_FORWARD).fill(VK_NEXT), ...Array(TURNS_BACK).fill(VK_PRIOR), VK_END, VK_HOME];
     for (const vk of keys) {
       postMessage(frame, WM_KEYDOWN, vk, 0);
       postMessage(frame, WM_KEYUP, vk, 0);

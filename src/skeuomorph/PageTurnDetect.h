@@ -8,7 +8,7 @@ struct DisplayModel;
 void DetectBeforeSpread(MainWindow* win, DisplayModel* dm);
 void DetectAfterPaint(MainWindow* win, bool flushed);
 void DetectForget(MainWindow* win, DisplayModel* dm);
-void DetectBeforeRelayout(MainWindow* win);
+void DetectBeforeRelayout(MainWindow* win, DisplayModel* dm);
 void DetectBeforePaint(MainWindow* win);
 void DetectLandAll(MainWindow* win, const char* why);
 void DetectLandAllWindows(const char* why);

@@ -21,6 +21,17 @@ constexpr int kMaxSheets = 14;
 constexpr float kEdgeLineGap = 1.6f;
 constexpr int kBaseDpi = 96;
 
+// Bundles (spec 3.5), as in the prototype
+constexpr float kBundleFan = 0.2f;
+constexpr float kBundleStiff = 0.4f;
+constexpr float kStiffFullPx = 6;
+constexpr float kStiffRadius = 1.6f;
+// Page Edges: the start side shrinks over the first 12% of the bottom sheet's
+// lift, the end side grows over the last 18% of the turn
+constexpr float kDepartFrom = 0.01f;
+constexpr float kDepartTo = 0.12f;
+constexpr float kArriveFrom = 0.82f;
+
 // pages on screen together; Single Page: first == last
 struct Spread {
     int first = 0;
@@ -103,6 +114,7 @@ Str TurnKindName(TurnKind kind);
 
 Spread SpreadOf(int pageNo, int pageCount, Layout layout);
 Skip FingerprintSkip(const Fingerprint& atHook, const Fingerprint& atPaint);
+bool OnlyRenumbered(const Fingerprint& atHook, const Fingerprint& atPaint);
 Skip CheckGate(const TurnGate& gate);
 Turn ClassifyTurn(Spread from, Spread to, Reading reading);
 Turn DecideTurn(Skip gate, Spread from, Spread to, Reading reading);
@@ -140,6 +152,41 @@ EdgeLine EdgeLineAt(int col, int thickPx, int dpi);
 float BundlePx(int pages);
 int BundleSheets(float bundlePx);
 
+// the sheets one Page Turn draws: a Curl is one plain sheet
+struct Sheets {
+    int n = 1;
+    float px = 0;    // the Bundle's thickness
+    float lag = 0;   // each sheet starts this share of the turn after the one above
+    float stiff = 0; // 0 .. kBundleStiff
+    float gap = 0;   // px between neighbouring sheets while lifted
+};
+
+// how high a sheet lies over the page while lifted, and how much wider it
+// wraps, px: the sheets of a Bundle share one cylinder axis
+struct Lift {
+    float base = 0;
+    float radius = 0;
+};
+
+// pages turned over, by their front page: Facing {2,3} -> {6,7} is 3..5
+struct PageRange {
+    int lo = 0;
+    int hi = -1; // lo > hi: none
+};
+
+float EaseInOut(float t);
+float Smooth(float a, float b, float x);
+Sheets SheetsOf(TurnKind kind, int pages, int leaves, float pageWidthPx);
+float SheetT(const Sheets& s, float t, int fromTop);
+Lift SheetLift(const Sheets& s, float p, int fromTop);
+float RadiusFactor(const Sheets& s);
+float LeadFactor(const Sheets& s);
+float EdgesDepart(const Sheets& s, float t);
+float EdgesArrive(float t);
+float EdgesOffTarget(int fromPx, int toPx, float done, bool back);
+PageRange TurnedPages(Spread from, Spread to);
+bool Overlaps(PageRange a, PageRange b);
+
 // ids of turns that land, oldest first
 struct Landed {
     int ids[kMaxInAir + 1]{};
@@ -164,7 +211,9 @@ class TurnClock {
     void SetDuration(int durationMs);
     int Start(i64 nowMs, TurnKind kind, Landed* landed);
     int Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Landed* landed);
+    int Start(i64 nowMs, TurnKind kind, Spread from, Spread to, Sheets sheets, Landed* landed, Landed* across);
     int Reverse(i64 nowMs, Spread from, Spread to, Landed* landed);
+    int Split(i64 nowMs, Spread from, Spread to, Landed* landed, int* bundleId);
     void Advance(i64 nowMs, Landed* landed);
     void LandAll(Landed* landed);
     int CurlMs(i64 nowMs) const;
@@ -182,9 +231,12 @@ class TurnClock {
         Spread from; // where it heads from and to: swapped when sent back
         Spread to;
         bool back = false;
+        Sheets sheets;
+        int splitOff = 0; // sheets split off its bottom
     };
     void Tap(i64 nowMs);
     void LandFirst(Landed* landed);
+    void LandAt(int i, Landed* landed);
 
     Flight air[kMaxInAir];
     int nAir = 0;

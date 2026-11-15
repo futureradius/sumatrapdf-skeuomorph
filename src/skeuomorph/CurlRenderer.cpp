@@ -20,6 +20,7 @@
 #include "skeuomorph/CurlLayer.h"
 #include "skeuomorph/ScreenCopy.h"
 #include "skeuomorph/FlashRecorder.h"
+#include "skeuomorph/PageEdges.h"
 #include "skeuomorph/CurlRenderer.h"
 #include "skeuomorph/CurlShaders.h"
 
@@ -94,6 +95,15 @@ constexpr float kSameZoom = 0.002f;
 constexpr float kSamePx = 0.5f;
 constexpr int kGridX = 48;
 constexpr int kGridY = 64;
+// a Bundle's sheets (spec 3.5): alternate a little in tone, darken along the
+// free edge, and only the top and bottom ones cast a shadow, 30% stronger
+constexpr float kSheetTint = 0.975f;
+constexpr float kFreeEdgeDark = 0.45f;
+constexpr float kBundleShadow = 1.3f;
+// depth nudge between sheets lying on each other, px: keeps their order
+constexpr float kStackNudge = 0.05f;
+// Page Edges drawn by the layer: one row of column colours per side
+constexpr int kEdgeCols = 256;
 
 // screen copies land here, then move into their Curl: the next Curl's old
 // Spread, and the newest Curl's landing page
@@ -131,9 +141,11 @@ struct Consts {
     float backdropY;   // or, without one, a row; < 0: none
     float frontSrc[4]; // canvas rect of the front face's picture (kModeImage: rect's)
     float backSrc[4];
-    float keep[4]; // kModeImage: opaque inside; empty: none
+    float keep[4];  // kModeImage: opaque inside; empty: none
+    float look[4];  // kModeCurl: lift, depth nudge at start, at end, tint
+    float stack[4]; // kModeCurl: free edge darkening; kModeEdges: -, -, page edge x, side
 };
-static_assert(sizeof(Consts) == 208, "matches cbuffer CB, in 16 byte rows");
+static_assert(sizeof(Consts) == 240, "matches cbuffer CB, in 16 byte rows");
 
 enum Mode {
     kModeFlat = 0,
@@ -141,7 +153,8 @@ enum Mode {
     kModePaper = 2,
     kModeShadow = 3,
     kModeBackdrop = 4,
-    kModeImage = 5
+    kModeImage = 5,
+    kModeEdges = 6
 };
 
 // everything a Curl needs, copied into the drawing thread
@@ -149,6 +162,13 @@ struct TurnData {
     int id = 0; // the command: a new Curl, or one sent back
     int clockId = 0;
     bool back = false;
+    TurnKind kind = TurnKind::Curl;
+    Sheets sheets;
+    int firstPage = 0;
+    int splitOf = 0;
+    float splitT = 0;
+    Landed across;
+    int dpi = 0;
     Pace pace;
     double t0 = 0;
     CurlShape shape = CurlShape::Spread;
@@ -212,6 +232,7 @@ struct Renderer {
     Sweep sweep = Sweep::ToLeft;
     bool forward = true;
     bool glide = false;      // the whole new screen is copied
+    bool split = false;      // so is a split-off sheet's: its Bundle lands under it
     bool landingCopy = true; // sent back: SumatraPDF shows the old Spread, nothing to copy
 };
 
@@ -270,6 +291,8 @@ struct Gpu {
     ComPtr<ID3D11RasterizerState> rastClipped; // shadows: only on paper
     ComPtr<ID3D11DepthStencilState> depth;
     ComPtr<ID3D11DepthStencilState> noDepth;
+    ComPtr<ID3D11Texture2D> edgeTex; // Page Edges' column colours: row 0 left, 1 right
+    ComPtr<ID3D11ShaderResourceView> edgeSrv;
     CurlPicture inbox[kSlotCount];
 };
 
@@ -409,7 +432,23 @@ static bool MakePipeline(Gpu& g) {
     }
     ds.DepthEnable = FALSE;
     ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-    return SUCCEEDED(dev->CreateDepthStencilState(&ds, &g.noDepth));
+    if (FAILED(dev->CreateDepthStencilState(&ds, &g.noDepth))) {
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = kEdgeCols;
+    td.Height = 2;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(dev->CreateTexture2D(&td, nullptr, &g.edgeTex))) {
+        return false;
+    }
+    return SUCCEEDED(dev->CreateShaderResourceView(g.edgeTex.Get(), nullptr, &g.edgeSrv));
 }
 
 static TempStr AdapterNameTemp(Gpu& g) {
@@ -814,6 +853,8 @@ struct Flight {
     CurlPicture landPic; // the landing page, once SumatraPDF shows it
     CurlPicture toPic;   // sent back: the new Spread, whole canvas
     bool back = false;   // sent back: heading to where it started
+    Sheets sheets;       // a Curl: one; a Bundle: 2-14
+    int splitOff = 0;    // sheets back taps split off its bottom
     float t = 0;         // time progress, 0 .. EndT
     double advancedAt = 0;
     bool showsNew = false;
@@ -903,6 +944,7 @@ static Consts BaseConsts(Gpu& g, const TurnData& t, Rect r) {
     c.paper[1] = GetGreen(t.paper) / 255.0f;
     c.paper[2] = GetBlue(t.paper) / 255.0f;
     c.paper[3] = 1;
+    c.look[3] = 1;
     return c;
 }
 
@@ -1033,11 +1075,15 @@ static void DrawShadow(Gpu& g, const Rect (&paperBelow)[2], Consts c, Rect clip,
     g.ctx->OMSetDepthStencilState(g.depth.Get(), 0);
 }
 
-// where the turning sheet lies and what its faces show, canvas px
+// where the turning sheet lies and what its faces show, canvas px. A Bundle
+// draws several: fromTop 0 is the top one where the turn starts
 struct SheetPlace {
     int shadowCopies = kShadowCopies;
-    RectF start; // flat before the turn
-    RectF end;   // and after it, mirrored over the spine
+    Sheets sheets;
+    int fromTop = 0;
+    float shadow = 1; // strength; 0: casts none
+    RectF start;      // flat before the turn
+    RectF end;        // and after it, mirrored over the spine
     float spineX = 0;
     float dirX = 1;
     Fade fade = Fade::None;
@@ -1048,14 +1094,22 @@ struct SheetPlace {
     Rect paperBelow[2];
 };
 
+enum class Pass {
+    Shadow,
+    Sheet,
+    Both
+};
+
 // the corner peel: the fold line starts through the outer bottom corner,
 // slanted, and straightens as it sweeps to the spine; the cylinder shrinks
-// over the last 40%, so the sheet lands flat on the other side
-static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, float t, Rect clip) {
+// over the last 40%, so the sheet lands flat on the other side. A Bundle's
+// sheets are stiffer and wrap round one axis, the lower ones further out
+static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, float t, Rect clip,
+                        Pass pass = Pass::Both) {
     if (sp.start.dx <= 0 || sp.end.dx <= 0) {
         return;
     }
-    float p = 0.5f - 0.5f * cosf(kPi * t);
+    float p = EaseInOut(t);
     float w = Lerp(sp.start.dx, sp.end.dx, p);
     float h = Lerp(sp.start.dy, sp.end.dy, p);
     float gapStart = sp.dirX > 0 ? sp.start.x - sp.spineX : sp.spineX - (sp.start.x + sp.start.dx);
@@ -1070,20 +1124,102 @@ static void DrawSheetAt(Gpu& g, const TurnData& turn, const SheetPlace& sp, floa
     c.spineX = sp.spineX;
     c.dirX = sp.dirX;
     c.progress = p;
-    c.lead = kLeadDeg * kPi / 180 * powf(1 - p, kLeadPow);
-    c.radius = kRadiusPerWidth * std::min(w, h) * (1 - SmoothStep(kShrinkFrom, 1, p)) + kMinRadius;
+    const Sheets& s = sp.sheets;
+    Lift lift = SheetLift(s, p, sp.fromTop);
+    float bend = kRadiusPerWidth * RadiusFactor(s) * std::min(w, h) * (1 - SmoothStep(kShrinkFrom, 1, p));
+    c.lead = kLeadDeg * LeadFactor(s) * kPi / 180 * powf(1 - p, kLeadPow);
+    c.radius = bend + kMinRadius + lift.radius;
     c.camDist = std::max(c.viewSize[1], kCamPerReach * reach) * kCamPerHeight;
     c.shading = kShading;
     c.alpha = SheetAlpha(sp.fade, t);
-    c.shadowAlpha = kShadow * kShadowPerCopy * c.alpha * kShadowCopies / sp.shadowCopies;
+    c.shadowAlpha = kShadow * kShadowPerCopy * c.alpha * kShadowCopies / sp.shadowCopies * sp.shadow;
+    // lying on each other, the top sheet wins where the turn starts, the
+    // bottom one (landing last) where it ends
+    c.look[0] = lift.base;
+    c.look[1] = kStackNudge * (s.n - 1 - sp.fromTop);
+    c.look[2] = kStackNudge * sp.fromTop;
+    if (s.n > 1) {
+        c.look[3] = sp.fromTop % 2 ? kSheetTint : 1;
+        c.stack[0] = kFreeEdgeDark;
+    }
     SetPicture(c.frontImg, sp.front ? *sp.front : CurlPicture());
     SetPicture(c.backImg, sp.back ? *sp.back : CurlPicture());
-    DrawShadow(g, sp.paperBelow, c, clip, sp.shadowCopies);
-    Draw(g, c, sp.front, sp.back, true);
+    if (pass != Pass::Sheet && sp.shadow > 0) {
+        DrawShadow(g, sp.paperBelow, c, clip, sp.shadowCopies);
+    }
+    if (pass != Pass::Shadow) {
+        Draw(g, c, sp.front, sp.back, true);
+    }
 }
 
-// the sheet where the screen copies have it: the view doesn't move
-static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, Rect clip, int shadowCopies) {
+static int BottomSheet(const Flight& f) {
+    return std::max(f.sheets.n - 1 - f.splitOff, 0);
+}
+
+static int ShadowCasters(const Flight& f) {
+    return BottomSheet(f) > 0 ? 2 : 1;
+}
+
+// sheet k of a Bundle: only the top one shows the old page, only the bottom
+// one the landing page; the ones between are blank paper
+static SheetPlace SheetOfStack(const SheetPlace& place, const Flight& f, int k) {
+    int bottom = BottomSheet(f);
+    SheetPlace sp = place;
+    sp.sheets = f.sheets;
+    sp.fromTop = k;
+    if (bottom == 0) {
+        return sp;
+    }
+    sp.front = k == 0 ? place.front : nullptr;
+    sp.back = k == bottom ? place.back : nullptr;
+    sp.shadow = k == 0 || k == bottom ? kBundleShadow : 0;
+    return sp;
+}
+
+static RectF MirrorF(RectF r, float spineX) {
+    return RectF(2 * spineX - (r.x + r.dx), r.y, r.dx, r.dy);
+}
+
+static RectF LerpRectF(RectF a, RectF b, float f) {
+    return RectF(Lerp(a.x, b.x, f), Lerp(a.y, b.y, f), Lerp(a.dx, b.dx, f), Lerp(a.dy, b.dy, f));
+}
+
+// a Curl's sheet, or a Bundle's sheets: the top and bottom ones' shadows
+// first, so they fall on the paper below and not on the stack. stepped: pages
+// of different sizes, the sheets between step evenly from the top page's
+// size to the bottom one's
+static void DrawStack(Gpu& g, const Flight& f, const SheetPlace& place, Rect clip, bool stepped = false) {
+    int bottom = BottomSheet(f);
+    float t = std::min(f.t, 1.0f);
+    if (bottom == 0 && f.sheets.n == 1) {
+        DrawSheetAt(g, f.turn, place, t, clip);
+        return;
+    }
+    int n = bottom + 1;
+    auto sheetAt = [&](int k) {
+        SheetPlace sp = SheetOfStack(place, f, k);
+        if (stepped) {
+            sp.start = LerpRectF(place.start, MirrorF(place.end, place.spineX), (float)k / n);
+            sp.end = LerpRectF(MirrorF(place.start, place.spineX), place.end, (float)(k + 1) / n);
+        }
+        return sp;
+    };
+    for (int k : {0, bottom}) {
+        DrawSheetAt(g, f.turn, sheetAt(k), SheetT(f.sheets, t, k), clip, Pass::Shadow);
+        if (bottom == 0) {
+            break;
+        }
+    }
+    for (int k = 0; k <= bottom; k++) {
+        DrawSheetAt(g, f.turn, sheetAt(k), SheetT(f.sheets, t, k), clip, Pass::Sheet);
+    }
+}
+
+// the sheet where the screen copies have it: the view doesn't move. A Bundle
+// that had sheets split off lands on the page SumatraPDF shows under the
+// split-off sheet: splitLanding, that sheet's copy of the whole screen
+static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, const CurlPicture* splitLanding, Rect clip,
+                      int shadowCopies) {
     const Geometry& geo = f.geo;
     if (geo.start.IsEmpty() || geo.end.IsEmpty()) {
         return;
@@ -1096,12 +1232,12 @@ static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, Rect clip, in
     sp.dirX = geo.dirX;
     sp.fade = geo.fade;
     sp.front = FacePicture(f, next, geo.startFace);
-    sp.back = FacePicture(f, next, geo.endFace);
+    sp.back = f.splitOff > 0 ? splitLanding : FacePicture(f, next, geo.endFace);
     sp.frontSrc = sp.start;
     sp.backSrc = sp.end;
     sp.paperBelow[0] = geo.paperBelow[0];
     sp.paperBelow[1] = geo.paperBelow[1];
-    DrawSheetAt(g, f.turn, sp, f.t, clip);
+    DrawStack(g, f, sp, clip);
 }
 
 // plain background in the old screen: x, a column in the middle of the margin
@@ -1341,7 +1477,7 @@ static void RenderGlide(Gpu& g, const Flight& f) {
     sp.backSrc = ToRectF(gl.newSrc[endSide]);
     sp.paperBelow[0] = Rounded(revealedAt);
     sp.paperBelow[1] = Rounded(staysAt);
-    DrawSheetAt(g, turn, sp, q, Rect());
+    DrawStack(g, f, sp, Rect(), true);
 }
 
 // the share of the Curl when the layer goes: a glide stays up while the new
@@ -1381,14 +1517,41 @@ static void RenderRest(Gpu& g, const Flight& f) {
     }
 }
 
-// what lies under the sheets: on the side they start from, the newest Curl's
-// new page; on the side they land on, the oldest one's old screen
+static int EndSideOf(const Flight& f) {
+    return f.geo.dirX > 0 ? kLeft : kRight;
+}
+
+// what lies under the sheets, per side: the old screen of the oldest turn
+// landing there; else the newest turn's new page it lifts off. A sheet split
+// off a Bundle goes back the other way, so then both sides have an old screen
 static void DrawBottom(Gpu& g, const Stage& st) {
     const Flight& newest = *VecLast(st.flights);
     const Flight& oldest = *st.flights[0];
     if (newest.turn.shape == CurlShape::Spread) {
-        DrawRevealed(g, newest, newest.geo.revealed);
-        DrawFlat(g, oldest.turn, oldest.geo.stays, oldest.oldPic);
+        const Flight* lands[2] = {};
+        for (const Flight* f : st.flights) {
+            int side = EndSideOf(*f);
+            if (!lands[side]) {
+                lands[side] = f;
+            }
+        }
+        for (int side = kLeft; side <= kRight; side++) {
+            if (lands[side]) {
+                continue;
+            }
+            for (int i = len(st.flights) - 1; i >= 0; i--) {
+                const Flight& f = *st.flights[i];
+                if (EndSideOf(f) != side) {
+                    DrawRevealed(g, f, f.geo.revealed);
+                    break;
+                }
+            }
+        }
+        for (const Flight* f : lands) {
+            if (f) {
+                DrawFlat(g, f->turn, f->geo.stays, f->oldPic);
+            }
+        }
         return;
     }
     DrawSingleAround(g, newest.turn.forward ? newest : oldest, Part::Bottom);
@@ -1397,40 +1560,172 @@ static void DrawBottom(Gpu& g, const Stage& st) {
     }
 }
 
-// as in a book: on the side the pages start from, the older ones lie on top;
-// on the side they land on, the newer ones. So each sheet is drawn in two
-// halves, split at the spine, each on a fresh depth buffer:
+// the newest split-off sheet's copy of the whole screen, once SumatraPDF shows it
+static const CurlPicture* SplitLanding(const Stage& st) {
+    for (int i = len(st.flights) - 1; i >= 0; i--) {
+        const Flight& f = *st.flights[i];
+        if (f.turn.splitOf) {
+            return f.landPic.ok ? &f.landPic : nullptr;
+        }
+    }
+    return nullptr;
+}
+
+// as in a book: on the side read pages lie on, a later page lies on top; on
+// the other side, an earlier one. So each sheet is drawn in two halves, split
+// at the spine, each on a fresh depth buffer (a Bundle's sheets share one):
 //
-//      end side   |   start side          (forward: pages go right to left)
-//   oldest .. newest | newest .. oldest   (drawn in this order)
+//      read side      |    other side        (left to right: read on the left)
+//   page 3, 5, 7 ..   |   .. 7, 5, 3         (drawn in this order)
 static void DrawSheets(Gpu& g, const Stage& st) {
     int n = len(st.flights);
     const Flight* next[kMaxInAir + 1] = {};
     for (int i = 0; i + 1 < n && i < kMaxInAir; i++) {
         next[i] = st.flights[i + 1];
     }
+    const CurlPicture* splitLanding = SplitLanding(st);
+    int casters = 0;
+    for (const Flight* f : st.flights) {
+        casters += ShadowCasters(*f);
+    }
+    int copies = std::max(kMinShadowCopies, kShadowCopies / casters);
     if (n == 1) {
-        DrawSheet(g, *st.flights[0], nullptr, Rect(), kShadowCopies);
+        DrawSheet(g, *st.flights[0], nullptr, splitLanding, Rect(), copies);
         return;
     }
-    const Geometry& geo = VecLast(st.flights)->geo;
+
+    int order[kMaxInAir + 1];
+    for (int i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    auto byPage = [&](int a, int b) { return st.flights[a]->turn.firstPage < st.flights[b]->turn.firstPage; };
+    std::sort(order, order + n, byPage);
+
+    const TurnData& newest = VecLast(st.flights)->turn;
+    bool r2l = newest.forward == (newest.sweep == Sweep::ToRight);
     Size view = CurlLayerSize(g.layer);
-    int spine = ClampI((int)lroundf(geo.spineX), 0, view.dx);
+    int spine = ClampI((int)lroundf(VecLast(st.flights)->geo.spineX), 0, view.dx);
     Rect left(0, 0, spine, view.dy);
     Rect right(spine, 0, view.dx - spine, view.dy);
-    Rect startSide = geo.dirX > 0 ? right : left;
-    Rect endSide = geo.dirX > 0 ? left : right;
+    Rect readSide = r2l ? right : left;
+    Rect otherSide = r2l ? left : right;
     ID3D11DepthStencilView* depth = CurlLayerDepth(g.layer);
-    int copies = std::max(kMinShadowCopies, kShadowCopies / n);
-    for (int i = n - 1; i >= 0; i--) {
+    for (int k = 0; k < n; k++) {
+        int i = order[k];
         g.ctx->ClearDepthStencilView(depth, D3D11_CLEAR_DEPTH, 1.0f, 0);
-        DrawSheet(g, *st.flights[i], next[i], startSide, copies);
+        DrawSheet(g, *st.flights[i], next[i], splitLanding, readSide, copies);
     }
-    for (int i = 0; i < n; i++) {
+    for (int k = n - 1; k >= 0; k--) {
+        int i = order[k];
         g.ctx->ClearDepthStencilView(depth, D3D11_CLEAR_DEPTH, 1.0f, 0);
-        DrawSheet(g, *st.flights[i], next[i], endSide, copies);
+        DrawSheet(g, *st.flights[i], next[i], splitLanding, otherSide, copies);
     }
     SetClip(g, Rect());
+}
+
+static bool BundleInAir(const Stage& st) {
+    for (const Flight* f : st.flights) {
+        if (f->turn.kind == TurnKind::Bundle) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int EdgesOf(const CurlSpread& s, int side) {
+    return side == kLeft ? s.edgesLeft : s.edgesRight;
+}
+
+static Rect PageBeside(const CurlSpread& s, CurlShape shape, int side) {
+    if (shape == CurlShape::Single) {
+        return s.left;
+    }
+    return side == kLeft ? s.left : s.right;
+}
+
+// one side's Page Edges, thick px, in the column colours SumatraPDF paints
+static void DrawEdgeColumns(Gpu& g, const TurnData& t, Rect page, int side, int thick) {
+    if (page.IsEmpty() || thick <= 0) {
+        return;
+    }
+    Rect r(side == kRight ? page.Right() : page.x - thick, page.y, thick, page.dy);
+    Consts c = BaseConsts(g, t, r);
+    c.mode = kModeEdges;
+    c.stack[2] = (float)(side == kRight ? page.Right() : page.x);
+    c.stack[3] = side == kRight ? 1.0f : -1.0f;
+    g.ctx->UpdateSubresource(g.consts.Get(), 0, nullptr, &c, 0, 0);
+    ID3D11ShaderResourceView* srvs[2] = {g.edgeSrv.Get(), nullptr};
+    g.ctx->PSSetShaderResources(0, 2, srvs);
+    UINT stride = 2 * sizeof(float);
+    UINT offset = 0;
+    ID3D11Buffer* vb = g.quadVB.Get();
+    g.ctx->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+    g.ctx->IASetIndexBuffer(g.quadIB.Get(), DXGI_FORMAT_R32_UINT, 0);
+    g.ctx->DrawIndexed(g.quadCount, 0, 0);
+}
+
+static void UploadEdgeColumns(Gpu& g, const TurnData& t, const int (&thick)[2]) {
+    u8 rows[2][kEdgeCols * 4] = {};
+    for (int side = kLeft; side <= kRight; side++) {
+        for (int col = 0; col < std::min(thick[side], kEdgeCols); col++) {
+            Color c = EdgeColumnColor(col, thick[side], t.dpi, t.paper);
+            u8* px = &rows[side][col * 4];
+            px[0] = GetRed(c);
+            px[1] = GetGreen(c);
+            px[2] = GetBlue(c);
+            px[3] = 255;
+        }
+    }
+    g.ctx->UpdateSubresource(g.edgeTex.Get(), 0, nullptr, rows, kEdgeCols * 4, 0);
+}
+
+// while a Bundle is in the air the layer draws the Page Edges (spec 3.5):
+// what SumatraPDF shows once everything lands, plus what each turn in the air
+// still carries. The start side shrinks as a Bundle's bottom sheet lifts, the
+// end side grows as it lands. Background first, over the room beside the pages
+static void DrawMovingEdges(Gpu& g, const Stage& st) {
+    if (!BundleInAir(st)) {
+        return;
+    }
+    const Flight& newest = *VecLast(st.flights);
+    const Flight& oldest = *st.flights[0];
+    const CurlSpread& end = newest.back ? newest.turn.from : newest.turn.to;
+    float px[2] = {(float)EdgesOf(end, kLeft), (float)EdgesOf(end, kRight)};
+    bool any[2] = {px[kLeft] > 0, px[kRight] > 0};
+    for (const Flight* f : st.flights) {
+        int endSide = EndSideOf(*f);
+        float t = std::min(f->t, 1.0f);
+        for (int side = kLeft; side <= kRight; side++) {
+            int from = EdgesOf(f->turn.from, side);
+            int to = EdgesOf(f->turn.to, side);
+            float done = side == endSide ? EdgesArrive(t) : EdgesDepart(f->sheets, t);
+            px[side] += EdgesOffTarget(from, to, done, f->back);
+            any[side] = any[side] || from > 0 || to > 0;
+        }
+    }
+
+    const TurnData& turn = oldest.turn;
+    int room = turn.edgesPx;
+    int thick[2] = {};
+    Rect page[2];
+    for (int side = kLeft; side <= kRight; side++) {
+        thick[side] = ClampI((int)lroundf(px[side]), 0, room);
+        page[side] = PageBeside(end, turn.shape, side);
+        if (page[side].IsEmpty()) {
+            page[side] = PageBeside(turn.from, turn.shape, side);
+        }
+    }
+    UploadEdgeColumns(g, newest.turn, thick);
+    PointF backdropAt = BackdropAt(turn);
+    for (int side = kLeft; side <= kRight; side++) {
+        Rect p = page[side];
+        if (!any[side] || p.IsEmpty()) {
+            continue;
+        }
+        Rect strip(side == kRight ? p.Right() : p.x - room, p.y, room, p.dy);
+        DrawBackdrop(g, turn, strip, oldest.oldPic, backdropAt, 1);
+        DrawEdgeColumns(g, newest.turn, p, side, thick[side]);
+    }
 }
 
 // Uncovered parts are blank paper until SumatraPDF shows the new Spread, then
@@ -1474,6 +1769,7 @@ static void RenderFrame(Gpu& g, const Stage& st, Scene scene) {
         return;
     }
     DrawBottom(g, st);
+    DrawMovingEdges(g, st);
     DrawSheets(g, st);
 }
 
@@ -1537,8 +1833,15 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
         what = StrL("sent back");
     }
     double covered = tm.covered > 0 ? tm.covered - tm.start : -1;
-    TempStr line = fmt("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms\n",
-                       tm.id, what, (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait);
+    // a Bundle: ", 14 sheets" (", 13 of 14 sheets" with one split off)
+    TempStr sheets = StrL("");
+    if (f.sheets.n > 1) {
+        int drawn = BottomSheet(f) + 1;
+        sheets = drawn == f.sheets.n ? fmt(", %d sheets", drawn) : fmt(", %d of %d sheets", drawn, f.sheets.n);
+    }
+    TempStr line =
+        fmt("skeuomorph-curl: #%d %s after %d ms, %d frames, %d late, covered %.1f ms, UI waited %.1f ms%s\n", tm.id,
+            what, (int)(tm.gone - tm.start), tm.frames, tm.lateFrames, covered, uiWait, sheets);
     if (IS_DEBUG && how != LandHow::SentBack) {
         // where the Spreads were, canvas px, for tests/skeuomorph-curl-look.ts:
         //   skeuomorph-rects: #3 from 10,20,300,400 to 5,20,310,400 edges 12 glide 1
@@ -1665,9 +1968,10 @@ static Flight* FindFlight(Stage& st, int clockId) {
     return nullptr;
 }
 
-// every tap starts its own Curl, from the old Spread copied at the tap. Only
-// Curls turning the same way share the air, a glide flies alone, and past 5
-// the oldest lands at once
+// every tap starts its own Curl or Bundle, from the old Spread copied at the
+// tap. Only turns the same way share the air (and sheets split off a Bundle,
+// going back), a glide flies alone, and past 5 the oldest lands at once. So
+// does a turn whose pages the new one crosses
 static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     st.pace = turn.pace;
     Flight* sent = turn.back ? FindFlight(st, turn.clockId) : nullptr;
@@ -1675,6 +1979,14 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
         st.lastStart = turn.id;
         SendBack(r, g, st, *sent, turn);
         return;
+    }
+
+    for (int k = 0; k < turn.across.n; k++) {
+        for (int i = len(st.flights) - 1; i >= 0; i--) {
+            if (st.flights[i]->turn.clockId == turn.across.ids[k]) {
+                Finish(r, g, st, i, LandHow::AtOnce, "jump across");
+            }
+        }
     }
 
     // pages sent back home lie where this one lifts: they'd hide it
@@ -1687,13 +1999,19 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     // the swap chain follows the canvas; its buffers are undefined until the next Present
     Size size = turn.canvas;
     bool resize = !size.IsEmpty() && !(size == CurlLayerSize(g.layer));
+    Flight* bundle = turn.splitOf ? FindFlight(st, turn.splitOf) : nullptr;
     if (len(st.flights) > 0) {
         const Flight& last = *VecLast(st.flights);
-        if (resize || last.glide.on || GlideOf(turn).on || !SameWay(last.turn, turn)) {
+        bool sameWay = bundle || SameWay(st.flights[0]->turn, turn);
+        if (resize || last.glide.on || GlideOf(turn).on || !sameWay) {
             LandAll(r, g, st, LandHow::AtOnce, "next Curl");
+            bundle = nullptr;
         }
     }
     if (len(st.flights) >= kMaxInAir) {
+        if (st.flights[0] == bundle) {
+            bundle = nullptr;
+        }
         Finish(r, g, st, 0, LandHow::AtOnce, "sixth Curl");
     }
     if (resize) {
@@ -1716,7 +2034,19 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     f->turn = turn;
     f->geo = GeometryOf(turn);
     f->glide = GlideOf(turn);
+    f->sheets = turn.sheets;
     f->advancedAt = turn.t0;
+    // split off the Bundle's bottom: it goes back from where that sheet is,
+    // and the Bundle now lands on the page this one lifts off
+    if (bundle) {
+        float bt = std::min(bundle->t, 1.0f);
+        f->t = 1 - SheetT(bundle->sheets, bt, BottomSheet(*bundle));
+        bundle->splitOff = std::min(bundle->splitOff + 1, bundle->sheets.n - 1);
+        bundle->turn.to.edgesLeft = turn.to.edgesLeft;
+        bundle->turn.to.edgesRight = turn.to.edgesRight;
+    } else if (turn.splitOf) {
+        f->t = turn.splitT;
+    }
     f->refreshMs = RefreshMs(r->hwnd);
     f->times.id = turn.id;
     f->times.start = turn.t0;
@@ -1779,8 +2109,8 @@ static bool IsStuck(const Stage& st, double now) {
 // every Curl in the air moves on at the current length, so a Curl sped up by
 // fast tapping keeps its progress; sent back, it moves back
 static void Advance(Stage& st, double now) {
-    int lenMs = std::max(st.pace.LengthMs(TurnKind::Curl, (i64)now), 1);
     for (Flight* f : st.flights) {
+        int lenMs = std::max(st.pace.LengthMs(f->turn.kind, (i64)now), 1);
         double dt = now - f->advancedAt;
         f->advancedAt = now;
         if (dt <= 0) {
@@ -2212,6 +2542,13 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     TurnData& t = c.turn;
     t.clockId = turn.clockId;
     t.back = turn.back;
+    t.kind = turn.kind;
+    t.sheets = turn.sheets;
+    t.firstPage = turn.firstPage;
+    t.splitOf = turn.splitOf;
+    t.splitT = turn.splitT;
+    t.across = turn.across;
+    t.dpi = turn.dpi;
     t.pace = turn.pace;
     t.t0 = CurlNowMs();
     t.shape = turn.shape;
@@ -2224,6 +2561,7 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     t.edgesPx = turn.edgesPx;
     t.canvas = ScreenCopySize(win);
     r->glide = GlideOf(t).on;
+    r->split = turn.splitOf != 0;
     r->mutex.Lock();
     t.id = ++r->started;
     r->mutex.Unlock();
@@ -2270,8 +2608,9 @@ void CurlWindowShowsNew(MainWindow* win, CurlSpread now) {
     } else if (!r->forward) {
         landing = now.left;
     }
-    // a glide shows the new pages scaled in a moving view, then the new screen
-    if (r->glide) {
+    // a glide shows the new pages scaled in a moving view, then the new
+    // screen; a split-off sheet's Bundle lands on the other page
+    if (r->glide || r->split) {
         landing = Rect(Point(), ScreenCopySize(win));
     }
     if (!r->landingCopy) {

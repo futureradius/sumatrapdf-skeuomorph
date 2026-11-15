@@ -565,7 +565,183 @@ static void EdgeLineTest() {
     utassert(EdgeLineAt(20, 21, 144) == EdgeLine::Rim);
 }
 
+static bool Close(float a, float b) {
+    return fabsf(a - b) < 1e-5f;
+}
+
+static void BundleSheetsTest() {
+    // a Curl: one plain sheet
+    Sheets c = SheetsOf(TurnKind::Curl, 1, 1, 500);
+    utassert(c.n == 1 && c.px == 0 && c.lag == 0 && c.stiff == 0 && c.gap == 0);
+    utassert(RadiusFactor(c) == 1 && LeadFactor(c) == 1);
+    utassert(Close(SheetT(c, 0.3f, 0), 0.3f));
+
+    // 38 pages in Facing: 18 px in 14 sheets, fan 20%, 40% stiffer
+    Sheets b = SheetsOf(TurnKind::Bundle, 38, 19, 500);
+    utassert(b.n == 14 && Near(b.px, 18) && Near(b.stiff, 0.4f));
+    utassert(Close(b.gap, 18.f / 13));
+    utassert(Close(b.lag, 18.f / 14 / 500 * 0.7f + 0.2f * 0.45f / 13));
+    utassert(Close(RadiusFactor(b), 1 + 1.6f * 0.4f));
+    utassert(Close(LeadFactor(b), 0.6f));
+    // unknown page width: the fan alone
+    utassert(Close(SheetsOf(TurnKind::Bundle, 38, 19, 0).lag, 0.2f * 0.45f / 13));
+
+    // never more sheets than leaves turned: 4 pages in Facing are 2 leaves
+    utassert(SheetsOf(TurnKind::Bundle, 4, 2, 500).n == 2);
+    utassert(SheetsOf(TurnKind::Bundle, 4, 4, 500).n == 3);
+    // thin Bundles are less stiff: full effect from 6 px
+    utassert(Close(SheetsOf(TurnKind::Bundle, 3, 3, 500).stiff, 0.4f * 2.1f / 6));
+
+    // the fan: the top sheet starts at once, the bottom one last; all land at 1
+    float bottomStarts = b.lag * 13;
+    utassert(SheetT(b, 0, 0) == 0 && SheetT(b, bottomStarts, 13) == 0);
+    utassert(SheetT(b, 1, 0) == 1 && SheetT(b, 1, 13) == 1);
+    utassert(SheetT(b, 0.5f, 0) > SheetT(b, 0.5f, 6) && SheetT(b, 0.5f, 6) > SheetT(b, 0.5f, 13));
+
+    // lifted, the sheets stack a gap apart round one cylinder axis; flat at both ends
+    Lift top = SheetLift(b, 0.5f, 0);
+    Lift bottom = SheetLift(b, 0.5f, 13);
+    utassert(Close(top.base, 13 * b.gap) && Close(top.radius, 0));
+    utassert(Close(bottom.base, 0) && Close(bottom.radius, 13 * b.gap));
+    utassert(SheetLift(b, 0, 0).base == 0 && SheetLift(b, 1, 0).base == 0);
+    utassert(SheetLift(c, 0.5f, 0).base == 0 && SheetLift(c, 0.5f, 0).radius == 0);
+}
+
+static void BundleEdgesTest() {
+    Sheets b = SheetsOf(TurnKind::Bundle, 38, 19, 500);
+    float bottomStarts = b.lag * 13;
+    // the start side waits until the bottom sheet lifts, then shrinks over the
+    // first 12% of its lift (eased: sheet progress 0.157 is 6% of the way)
+    utassert(EdgesDepart(b, bottomStarts) == 0);
+    float midway = bottomStarts + 0.157f * (1 - bottomStarts);
+    utassert(EdgesDepart(b, midway) > 0.3f && EdgesDepart(b, midway) < 0.7f);
+    utassert(EdgesDepart(b, 0.5f) == 1);
+    // a Curl's sheet starts at once
+    Sheets c = SheetsOf(TurnKind::Curl, 1, 1, 500);
+    utassert(EdgesDepart(c, 0.157f) > 0.3f && EdgesDepart(c, 0.157f) < 0.7f);
+
+    // the end side grows over the last 18% of the turn
+    utassert(EdgesArrive(0.82f) == 0 && EdgesArrive(1) == 1);
+    utassert(EdgesArrive(0.91f) > 0.3f && EdgesArrive(0.91f) < 0.7f);
+
+    // still to come, px: heading on, from 20 px to 2 px (start side) or 5 to 23 (end)
+    utassert(Close(EdgesOffTarget(20, 2, 0, false), 18));
+    utassert(Close(EdgesOffTarget(20, 2, 1, false), 0));
+    utassert(Close(EdgesOffTarget(5, 23, 0.5f, false), -9));
+    // heading back, the target is where it came from
+    utassert(Close(EdgesOffTarget(20, 2, 0, true), 0));
+    utassert(Close(EdgesOffTarget(20, 2, 1, true), -18));
+}
+
+static bool SameRange(PageRange r, int lo, int hi) {
+    return r.lo == lo && r.hi == hi;
+}
+
+static void TurnedPagesTest() {
+    utassert(SameRange(TurnedPages({2, 3}, {6, 7}), 3, 5));
+    utassert(SameRange(TurnedPages({6, 7}, {2, 3}), 3, 5));
+    utassert(SameRange(TurnedPages({3, 3}, {4, 4}), 3, 3));
+    utassert(SameRange(TurnedPages({5, 5}, {3, 3}), 3, 4));
+    utassert(SameRange(TurnedPages({1, 1}, {2, 3}), 1, 1));
+    PageRange none = TurnedPages({}, {});
+    utassert(none.lo > none.hi);
+
+    utassert(Overlaps({3, 3}, {3, 5}) && Overlaps({3, 5}, {5, 9}));
+    utassert(!Overlaps({3, 3}, {5, 5}) && !Overlaps({3, 3}, {4, 4}));
+    utassert(!Overlaps(none, {0, 9}) && !Overlaps({0, 9}, none));
+}
+
+static void AcrossTest() {
+    Spread a{1, 1};
+    Spread b{2, 3};
+    Spread c{4, 5};
+    Spread z{40, 41};
+    Landed landed;
+    Landed across;
+    TurnClock k(700);
+    int ab = k.Start(0, TurnKind::Curl, a, b, Sheets(), &landed, &across);
+    int bc = k.Start(100, TurnKind::Curl, b, c, Sheets(), &landed, &across);
+    utassert(across.n == 0 && k.InAir() == 2);
+
+    // sent back, then End: the jump crosses its page, which lands at once
+    utassert(k.Reverse(200, c, b, &landed) == bc);
+    Sheets s = SheetsOf(TurnKind::Bundle, 38, 19, 0);
+    int bz = k.Start(250, TurnKind::Bundle, b, z, s, &landed, &across);
+    utassert(across.n == 1 && across.ids[0] == bc);
+    utassert(k.InAir() == 2 && k.Progress(ab) > 0 && k.Progress(bz) == 0);
+
+    // turns beside each other don't cross
+    TurnClock m(700);
+    m.Start(0, TurnKind::Curl, b, c, Sheets(), &landed, &across);
+    m.Start(50, TurnKind::Bundle, c, z, s, &landed, &across);
+    utassert(across.n == 0 && m.InAir() == 2);
+}
+
+static void SplitTest() {
+    Spread a{2, 3};
+    Spread b{4, 5};
+    Spread c{6, 7};
+    Spread x{36, 37};
+    Spread y{38, 39};
+    Spread z{40, 41};
+    Landed landed;
+    Sheets s = SheetsOf(TurnKind::Bundle, 38, 19, 0);
+
+    // a back tap splits off the Bundle's last sheet, which goes back from where it is
+    TurnClock k(700);
+    int bundle = k.Start(0, TurnKind::Bundle, a, z, s, &landed, nullptr);
+    int id = 0;
+    int one = k.Split(455, z, y, &landed, &id);
+    utassert(one != 0 && id == bundle && k.InAir() == 2 && k.IsBack(one));
+    utassert(Close(k.Progress(one), 1 - SheetT(s, 0.5f, 13)));
+    // the next back tap splits off the next sheet
+    int two = k.Split(500, y, x, &landed, &id);
+    utassert(two != 0 && two != one && id == bundle && k.InAir() == 3);
+    utassert(Close(k.Progress(two), 1 - SheetT(s, 500.f / 910, 12)));
+    // a forward tap sends the newest split sheet on again
+    utassert(k.Reverse(520, x, y, &landed) == two && !k.IsBack(two));
+
+    // not a split: a tap from elsewhere, the same way, or back to its start
+    TurnClock m(700);
+    m.Start(0, TurnKind::Bundle, a, c, s, &landed, nullptr);
+    utassert(m.Split(100, b, a, &landed, &id) == 0);
+    utassert(m.Split(100, c, Spread{8, 9}, &landed, &id) == 0);
+    TurnClock n(700);
+    n.Start(0, TurnKind::Bundle, a, c, s, &landed, nullptr);
+    utassert(n.Split(100, c, b, &landed, &id) != 0);
+    utassert(n.Split(150, b, a, &landed, &id) == 0);
+    // a Curl isn't split
+    TurnClock p(700);
+    p.Start(0, TurnKind::Curl, b, c, Sheets(), &landed, nullptr);
+    utassert(p.Split(100, c, b, &landed, &id) == 0);
+}
+
+static void RenumberedTest() {
+    Fingerprint p;
+    p.dm = 1;
+    p.displayMode = 2;
+    p.layoutGeneration = 5;
+    p.pageCount = 100;
+    Fingerprint q = p;
+    utassert(!OnlyRenumbered(q, p));
+    q.layoutGeneration = 6;
+    q.pageCount = 120;
+    utassert(OnlyRenumbered(q, p));
+    q.r2l = true;
+    utassert(!OnlyRenumbered(q, p));
+    q = p;
+    q.pageCount = 120;
+    q.dm = 3;
+    utassert(!OnlyRenumbered(q, p));
+}
+
 void PageTurnLogic_UnitTests() {
+    BundleSheetsTest();
+    BundleEdgesTest();
+    TurnedPagesTest();
+    AcrossTest();
+    SplitTest();
+    RenumberedTest();
     SpreadOfTest();
     ClassifyTest();
     FingerprintTest();

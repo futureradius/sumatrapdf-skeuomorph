@@ -212,20 +212,25 @@ enum class Side {
     Right
 };
 
-// fine 1 px columns beside the page's outer edge, full page height, a little
-// darker toward the outside; cut off at the window, never squeezed
-static void PaintSide(HDC hdc, Rect page, Side side, int thick, int dpi, Color paper, Rect clip) {
-    Color colNear = Tint(paper, kEdgeNear);
-    Color colOuter = Tint(paper, kEdgeOuter);
-    for (int col = 0; col < thick; col++) {
-        Color c = Mix(colNear, colOuter, (col + 0.5f) / thick);
-        EdgeLine line = EdgeLineAt(col, thick, dpi);
-        if (line == EdgeLine::Fine) {
-            c = Mix(c, kFineLine, kFineLineAlpha);
-        } else if (line == EdgeLine::Rim) {
-            c = Mix(c, kRimLine, kRimLineAlpha);
-        }
+// column col of Page Edges thick px wide, col 0 beside the page: a little
+// darker toward the outside. The Curl layer draws the same colours
+Color EdgeColumnColor(int col, int thick, int dpi, Color paper) {
+    Color c = Mix(Tint(paper, kEdgeNear), Tint(paper, kEdgeOuter), (col + 0.5f) / thick);
+    EdgeLine line = EdgeLineAt(col, thick, dpi);
+    if (line == EdgeLine::Fine) {
+        return Mix(c, kFineLine, kFineLineAlpha);
+    }
+    if (line == EdgeLine::Rim) {
+        return Mix(c, kRimLine, kRimLineAlpha);
+    }
+    return c;
+}
 
+// fine 1 px columns beside the page's outer edge, full page height; cut off
+// at the window, never squeezed
+static void PaintSide(HDC hdc, Rect page, Side side, int thick, int dpi, Color paper, Rect clip) {
+    for (int col = 0; col < thick; col++) {
+        Color c = EdgeColumnColor(col, thick, dpi, paper);
         int x = side == Side::Right ? page.x + page.dx + col : page.x - 1 - col;
         Rect r = Rect(x, page.y, 1, page.dy).Intersect(clip);
         if (r.IsEmpty()) {

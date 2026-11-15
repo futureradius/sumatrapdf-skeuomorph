@@ -48,6 +48,8 @@ struct WindowTurns {
     Skip gate = Skip::None;
 
     TurnClock clock{0};
+    int roomPx = 0;          // the room beside the pages when the last turn started
+    bool renumbered = false; // the pending action follows an EPUB layout change
 };
 
 static Vec<WindowTurns*> gWindowTurns;
@@ -172,10 +174,30 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
     return s;
 }
 
-static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, int lenMs, int id, const TurnClock& clock) {
+// what FinishTurn hands the Curl layer besides the Turn
+struct Launch {
+    int id = 0;
+    bool reversed = false; // id is in the air, sent back or on again
+    int lenMs = 0;
+    Sheets sheets;
+    int firstPage = 0;
+    int splitOf = 0;
+    Landed across;
+};
+
+static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, const Launch& l, const TurnClock& clock) {
+    int id = l.id;
+    int lenMs = l.lenMs;
     CurlTurn c;
     c.clockId = id;
-    c.back = clock.IsBack(id);
+    c.back = l.reversed;
+    c.kind = t.kind;
+    c.sheets = l.sheets;
+    c.firstPage = l.firstPage;
+    c.splitOf = l.splitOf;
+    c.splitT = l.splitOf ? clock.Progress(id) : 0;
+    c.across = l.across;
+    c.dpi = dm->uiDpi;
     c.pace = clock.PaceNow();
     c.shape = IsSingle(dm->GetDisplayMode()) ? CurlShape::Single : CurlShape::Spread;
     c.sweep = t.sweep;
@@ -198,10 +220,12 @@ static bool IsHidden(MainWindow* win) {
 //   skeuomorph: Bundle 18 px backward, 39 pages, sweep right, 910 ms, 2 in air, 0 landed [40-40 -> 1-1]
 //   skeuomorph: nothing (display mode switch) [1-1 -> 1-2]
 //   skeuomorph: Curl backward, 1 page, sweep right, 400 ms, 2 in air, 0 landed [3-3 -> 2-2], sends #4 back
+//   skeuomorph: Curl backward, 1 page, sweep right, 700 ms, 2 in air, 0 landed [40-41 -> 38-39], splits #7
 // "in air" counts this turn; "landed" ones this turn made land early or that
 // finished since the last turn. "sends back": a page in the air turns back
-// instead of a new Curl
-static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir, int landed, int sentBack = 0) {
+// instead of a new Curl; "splits": a back tap splits the last sheet off a Bundle
+static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir, int landed, int sentBack = 0,
+                    int splits = 0) {
     TempStr spreads = fmt("[%d-%d -> %d-%d]", from.first, from.last, to.first, to.last);
     if (t.kind == TurnKind::Nothing) {
         logf("skeuomorph: nothing (%s) %s\n", SkipName(t.why), spreads);
@@ -216,12 +240,22 @@ static void LogTurn(const Turn& t, Spread from, Spread to, int lenMs, int inAir,
     Str sweep = t.sweep == Sweep::ToLeft ? StrL("left") : StrL("right");
     Str pages = t.pages == 1 ? StrL("page") : StrL("pages");
     TempStr back = sentBack ? fmt(", sends #%d back", sentBack) : StrL("");
+    if (splits) {
+        back = fmt(", splits #%d", splits);
+    }
     logf("skeuomorph: %s %s, %d %s, sweep %s, %d ms, %d in air, %d landed %s%s\n", what, dir, t.pages, pages, sweep,
          lenMs, inAir, landed, spreads, back);
 }
 #else
-static void LogTurn(const Turn&, Spread, Spread, int, int, int, int = 0) {}
+static void LogTurn(const Turn&, Spread, Spread, int, int, int, int = 0, int = 0) {}
 #endif
+
+// an EPUB laid out anew (spec 3.8): turns in the air keep flying with their
+// starting size, and the Page Edges correct as they land. Unless the room
+// beside the pages changed: then nothing is where the Curls have it
+static bool KeepsFlying(WindowTurns* wt, DisplayModel* dm, bool renumbered) {
+    return wt && dm && renumbered && wt->clock.InAir() > 0 && EdgesRoomOnScreen(dm) == wt->roomPx;
+}
 
 // everything in the air lands now: the layer goes and the clock forgets it,
 // so the next Curl is a whole one, not a fast tap
@@ -262,31 +296,41 @@ static void FinishTurn(MainWindow* win) {
     Turn t = DecideTurn(wt->gate, wt->from, to, reading);
     if (t.kind == TurnKind::Nothing) {
         LogTurn(t, wt->from, to, 0, wt->clock.InAir(), 0);
-        LandEverything(wt, win, SkipName(t.why).s);
+        if (!KeepsFlying(wt, dm, wt->renumbered)) {
+            LandEverything(wt, win, SkipName(t.why).s);
+        }
         return;
     }
 
-    // a page in the air turning back is not a new Curl
+    // a page in the air turning back is not a new Curl, nor is a sheet split
+    // off a Bundle
     i64 now = NowMs();
     Landed landed;
     wt->clock.SetDuration(PageTurnDurationMs());
-    int id = 0;
+    Launch l;
     if (t.kind == TurnKind::Curl) {
-        id = wt->clock.Reverse(now, wt->from, to, &landed);
+        l.id = wt->clock.Reverse(now, wt->from, to, &landed);
+        l.reversed = l.id != 0;
     }
-    int sentBack = id;
-    if (!id) {
-        id = wt->clock.Start(now, t.kind, wt->from, to, &landed);
+    if (!l.id && t.kind == TurnKind::Curl) {
+        l.id = wt->clock.Split(now, wt->from, to, &landed, &l.splitOf);
+        if (!l.id) {
+            l.splitOf = 0;
+        }
     }
-    int lenMs = wt->clock.LengthMs(t.kind, now);
-    LogTurn(t, wt->from, to, lenMs, wt->clock.InAir(), landed.n, sentBack);
+    if (!l.id) {
+        CurlSpread on = SpreadOnScreen(dm);
+        float pageDx = (float)std::max(on.left.dx, on.right.dx);
+        int leaves = IsSingle(dm->GetDisplayMode()) ? t.pages : (t.pages + 1) / 2;
+        l.sheets = SheetsOf(t.kind, t.pages, leaves, pageDx);
+        l.id = wt->clock.Start(now, t.kind, wt->from, to, l.sheets, &landed, &l.across);
+    }
+    l.lenMs = wt->clock.LengthMs(t.kind, now);
+    l.firstPage = TurnedPages(wt->from, to).lo;
+    LogTurn(t, wt->from, to, l.lenMs, wt->clock.InAir(), landed.n, l.reversed ? l.id : 0, l.splitOf);
 
-    // Bundles are still instant jumps in build step 4 (they come in step 7)
-    if (t.kind != TurnKind::Curl) {
-        LandEverything(wt, win, "Bundle");
-        return;
-    }
-    StartCurl(win, dm, t, lenMs, id, wt->clock);
+    wt->roomPx = EdgesRoomOnScreen(dm);
+    StartCurl(win, dm, t, l, wt->clock);
     FlashCurlStarted(win);
 }
 
@@ -311,13 +355,14 @@ void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
     // SetDisplayMode & co. re-pair the pages before GoToPage: the reader last
     // saw the painted Spread, not dm's rows
     wt->gate = CheckGate(g);
+    wt->renumbered = g.syncing || OnlyRenumbered(g.atHook, g.atPaint);
     wt->from = g.atHook == g.atPaint ? SpreadNow(dm) : wt->spreadAtPaint;
     wt->pendingDm = dm;
     wt->pending = true;
 
     // the view changed since the last paint (tab switch, display mode, Manga
     // Mode): what's in the air lands before anything is drawn
-    if (g.atHook != g.atPaint) {
+    if (g.atHook != g.atPaint && !KeepsFlying(wt, dm, wt->renumbered)) {
         LandEverything(wt, win, "view changed");
     }
 
@@ -368,10 +413,14 @@ void DetectForget(MainWindow* win, DisplayModel* dm) {
 
 // hook 4, outside an action: zoom, rotation, Manga Mode, Presentation, a new
 // canvas size. Inside one (GoToPage re-lays out every Page Turn), FinishTurn
-// decides; the Curl it starts comes after, so a turn never lands its own Curl
-void DetectBeforeRelayout(MainWindow* win) {
+// decides; the Curl it starts comes after, so a turn never lands its own Curl.
+// An EPUB laid out anew keeps them flying
+void DetectBeforeRelayout(MainWindow* win, DisplayModel* dm) {
     WindowTurns* wt = FindTurns(win, Lookup::Find);
     if (wt && wt->pending) {
+        return;
+    }
+    if (KeepsFlying(wt, dm, dm && dm->syncingWithEngineLayout)) {
         return;
     }
     LandEverything(wt, win, "relayout");
@@ -385,7 +434,12 @@ void DetectBeforePaint(MainWindow* win) {
         return;
     }
     WindowTurns* wt = FindTurns(win, Lookup::Find);
-    if (wt && FingerprintOf(win->AsFixed()) == wt->atPaint) {
+    DisplayModel* dm = win->AsFixed();
+    Fingerprint now = FingerprintOf(dm);
+    if (wt && now == wt->atPaint) {
+        return;
+    }
+    if (wt && KeepsFlying(wt, dm, OnlyRenumbered(now, wt->atPaint))) {
         return;
     }
     LandEverything(wt, win, "view changed");

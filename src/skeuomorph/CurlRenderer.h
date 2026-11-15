@@ -39,6 +39,13 @@ enum class CurlShape {
 struct CurlTurn {
     int clockId = 0;   // TurnClock's id
     bool back = false; // the Curl clockId is sent back (or on again): no new Curl
+    pageturn::TurnKind kind = pageturn::TurnKind::Curl;
+    pageturn::Sheets sheets;
+    int firstPage = 0;       // the first page it turns over: orders sheets as in a book
+    int splitOf = 0;         // a back tap split this Curl off the Bundle splitOf's bottom
+    float splitT = 0;        // where the clock has it, if that Bundle is gone
+    pageturn::Landed across; // turns in the air whose pages this one crosses: they land at once
+    int dpi = 0;
     pageturn::Pace pace;
     CurlShape shape = CurlShape::Spread;
     pageturn::Sweep sweep = pageturn::Sweep::ToLeft;
