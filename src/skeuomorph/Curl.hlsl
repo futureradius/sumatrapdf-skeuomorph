@@ -6,7 +6,7 @@
 // mode 1: the sheet, wrapped over a cylinder lying on it (corner peel, spec 3.3)
 // mode 2: blank paper over rect
 // mode 3: the sheet's shadow, flattened onto the paper below
-// mode 4: background over rect: texFront's column backdropX, at the same height
+// mode 4: background over rect: texFront's column backdropX at the same height, else its row backdropY
 // mode 5: texFront's frontSrc stretched over rect, smooth; see-through by
 //         1 - alpha outside keep (pages of different sizes in a moving view)
 //
@@ -36,7 +36,7 @@ cbuffer CB : register(b0) {
     float shadowAlpha;
     float shading;
     float backdropX; // mode 4: a column of plain background in texFront; < 0: none
-    float pad;
+    float backdropY; // or, without one, a row; < 0: none
     float4 frontSrc; // canvas rect in texFront the front face (mode 5: rect) shows
     float4 backSrc;  // and in texBack, the back face
     float4 keep;     // mode 5: opaque inside this canvas rect; w = 0: none
@@ -198,8 +198,8 @@ float4 PS(VSOut i) : SV_Target {
         return float4(paper.rgb * alpha, alpha);
     }
     if (mode == 4) {
-        float2 c = float2(backdropX, i.pos.y);
-        if (backdropX < 0 || !Inside(c, frontImg)) {
+        float2 c = backdropX >= 0 ? float2(backdropX, i.pos.y) : float2(i.pos.x, backdropY);
+        if (c.x < 0 || c.y < 0 || !Inside(c, frontImg)) {
             return float4(paper.rgb * alpha, alpha);
         }
         return float4(texFront.Load(int3(c - frontImg.xy, 0)).rgb * alpha, alpha);

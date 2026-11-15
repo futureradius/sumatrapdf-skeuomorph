@@ -117,8 +117,8 @@ struct Consts {
     float shadowOff[2];
     float shadowAlpha;
     float shading;
-    float backdropX; // kModeBackdrop: a column of plain background; < 0: none
-    float pad;
+    float backdropX;   // kModeBackdrop: a column of plain background; < 0: none
+    float backdropY;   // or, without one, a row; < 0: none
     float frontSrc[4]; // canvas rect of the front face's picture (kModeImage: rect's)
     float backSrc[4];
     float keep[4]; // kModeImage: opaque inside; empty: none
@@ -900,14 +900,15 @@ static void DrawFlat(Gpu& g, const TurnData& t, Rect r, const CurlPicture& pic, 
 }
 
 // plain background over r, as the old screen had it at the same height
-static void DrawBackdrop(Gpu& g, const TurnData& t, Rect r, const CurlPicture& pic, float x, float alpha) {
+static void DrawBackdrop(Gpu& g, const TurnData& t, Rect r, const CurlPicture& pic, PointF at, float alpha) {
     if (r.IsEmpty() || alpha <= 0) {
         return;
     }
     Consts c = BaseConsts(g, t, r);
     c.mode = kModeBackdrop;
     c.alpha = alpha;
-    c.backdropX = x;
+    c.backdropX = at.x;
+    c.backdropY = at.y;
     SetPicture(c.frontImg, pic);
     Draw(g, c, &pic, nullptr, false);
 }
@@ -1039,19 +1040,26 @@ static void DrawSheet(Gpu& g, const Flight& f, float t) {
     DrawSheetAt(g, f.turn, sp, t);
 }
 
-// a column of plain background in the old screen: the middle of the margin
-// beside the old page and its Page Edges; -1: none on screen
-static float BackdropX(const TurnData& t) {
+// plain background in the old screen: x, a column in the middle of the margin
+// beside the old page and its Page Edges; else y, a row above or below them
+// (a Spread as wide as the window); -1: none on screen
+static PointF BackdropAt(const TurnData& t) {
     Rect page = UnionOf(t.from.left, t.from.right);
     int left = page.x - t.edgesPx;
     if (left >= 1) {
-        return (float)(left / 2);
+        return PointF((float)(left / 2), -1);
     }
     int right = page.Right() + t.edgesPx;
     if (right < t.canvas.dx) {
-        return (float)((right + t.canvas.dx) / 2);
+        return PointF((float)((right + t.canvas.dx) / 2), -1);
     }
-    return -1;
+    if (page.y >= 1) {
+        return PointF(-1, (float)(page.y / 2));
+    }
+    if (page.Bottom() < t.canvas.dy) {
+        return PointF(-1, (float)((page.Bottom() + t.canvas.dy) / 2));
+    }
+    return PointF(-1, -1);
 }
 
 // Single Page, all but the turning sheet. Pages of different sizes put the new
@@ -1074,7 +1082,7 @@ static void DrawSingleAround(Gpu& g, const Flight& f, float t) {
     Size view = CurlLayerSize(g.layer);
     Rect canvas(0, 0, view.dx, view.dy);
     float settle = SheetAlpha(Fade::Out, t); // 1 until the sheet settles, then 0
-    float x = BackdropX(turn);
+    PointF backdropAt = BackdropAt(turn);
     Rect parts[4];
     if (turn.forward) {
         if (!f.seeThrough) {
@@ -1082,7 +1090,7 @@ static void DrawSingleAround(Gpu& g, const Flight& f, float t) {
         }
         Outside(oldPage, newPage, parts);
         for (Rect r : parts) {
-            DrawBackdrop(g, turn, r, old, x, settle);
+            DrawBackdrop(g, turn, r, old, backdropAt, settle);
         }
         Outside(canvas, oldPage, parts);
         for (Rect r : parts) {
@@ -1094,7 +1102,7 @@ static void DrawSingleAround(Gpu& g, const Flight& f, float t) {
     DrawFlat(g, turn, under, old);
     Outside(newPage, oldPage, parts);
     for (Rect r : parts) {
-        DrawBackdrop(g, turn, r, old, x, 1);
+        DrawBackdrop(g, turn, r, old, backdropAt, 1);
     }
     Outside(canvas, under, parts);
     for (Rect r : parts) {
@@ -1194,14 +1202,14 @@ static void RenderGlide(Gpu& g, const Flight& f, float q) {
     Cam cam = CamAt(gl, 0.5f - 0.5f * cosf(kPi * qc));
     Size view = CurlLayerSize(g.layer);
     Rect canvas(0, 0, view.dx, view.dy);
-    float backdropX = BackdropX(turn);
-    DrawBackdrop(g, turn, canvas, *oldPic, backdropX, 1);
+    PointF backdropAt = BackdropAt(turn);
+    DrawBackdrop(g, turn, canvas, *oldPic, backdropAt, 1);
 
     bool landed = q >= 1;
     if (landed && newPic) {
         DrawFlat(g, turn, canvas, *newPic);
         for (int i = kLeft; i <= kRight; i++) {
-            DrawBackdrop(g, turn, EdgeRoom(gl.newSrc[i], i, gl.newEdges[i]), *oldPic, backdropX, 1);
+            DrawBackdrop(g, turn, EdgeRoom(gl.newSrc[i], i, gl.newEdges[i]), *oldPic, backdropAt, 1);
         }
     }
     for (int i = kLeft; i <= kRight; i++) {
