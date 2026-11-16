@@ -40,8 +40,6 @@ After making a change to a .cpp, .c or .h file under `src/` (and before running 
 
 After changing a .ts file under `cmd/` or `tests/`, run `bun cmd/format.ts` — it runs prettier over `cmd/**/*.ts` and `tests/**/*.ts` and then clang-formats the C/C++ sources. Use `bun cmd/format.ts -ts` to run only the prettier pass (no Visual Studio / clang-format needed). Prettier settings live in `.prettierrc.json` (`printWidth` 120, `endOfLine` lf) and `.prettierignore` (vendored code, build output, scratch `tmp/` dirs). For other prettier-owned files (.js / .json / .md) run `bunx prettier --write <files>` on the files you touched.
 
-Never commit changes automatically. Always wait for explicit command to commit changes.
-
 When committing a fix for a GitHub issue, end the commit message's **first line** with `(fixes #<issue-no>)`, e.g. `fix crash on committing an empty zoom value (fixes #5909)`. That is the line GitHub shows everywhere, so the link belongs there, not buried in the body.
 
 When committing work done with AI assistance, append the user prompt(s) that produced the change at the very end of the commit message as a single line: `prompt: ...`. If there were multiple prompts, squash them into one concise line. Record the substantive request only — omit meta-instructions such as "commit", "push", "check work", or "verify".
@@ -109,7 +107,7 @@ the message must explain the context and reasoning.
   functions each app implements for the shared code (`// implemented by each
   app`). Put a function there instead of writing it twice. A new shared file
   goes in `premake5.files.lua`, `ng-shared.ts` and `ng-targets.ts`.
-- Ng follows the same coding and commit rules, including **no automatic commits**.
+- Ng follows the same coding and commit rules.
 
 Build with `bun cmd/ng-build.ts -dbg` or `-rel`; the host platform is implied.
 Use `-linux`, `-mac` or `-wasm` to select a platform. Outputs are

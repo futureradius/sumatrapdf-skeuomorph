@@ -25,7 +25,7 @@ You don't need to read the map or the old tickets. Open one only if you need the
 
 **Repo rules**
 
-- Follow `agents.md`, except: **commit and push your own finished work without asking** (decided by the human on 2026-11-09; this overrides `agents.md`'s "never commit automatically").
+- Follow `agents.md`. **Commit and push your own finished work without asking** (decided by the human on 2026-11-09).
 - Work on the `scrolling` branch.
 - Name test copies starting with `-for-testing`.
 - This is a personal fork, never sent back to the original SumatraPDF. All new code goes in `src/skeuomorph/` (and `tests/skeuomorph-*.ts`). Original files change only at the hook points in [section 5.2](#52-hook-points-in-original-files), within each build step's line budget. Going over the budget means asking first.
