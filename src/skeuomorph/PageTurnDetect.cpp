@@ -406,7 +406,7 @@ void DetectAfterPaint(MainWindow* win, bool flushed) {
         FlashWatch(win);
     }
     // Rough Pages: a background copy of the document while it shows here
-    CurlRough(win, paged ? dm : nullptr);
+    CurlRough(win, paged ? dm : nullptr, paged ? SpreadOnScreen(dm) : CurlSpread());
     if (!flushed) {
         return;
     }

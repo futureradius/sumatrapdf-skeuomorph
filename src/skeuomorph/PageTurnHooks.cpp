@@ -3,8 +3,15 @@
 
 #include "base/Base.h"
 
+#include "gui/UIModels.h"
+
 #include "Settings.h"
 #include "AppSettings.h"
+#include "DisplayMode.h"
+#include "DocController.h"
+#include "EngineBase.h"
+#include "DisplayModel.h"
+#include "RenderCache.h"
 
 #include "skeuomorph/PageTurnLogic.h"
 #include "skeuomorph/PageTurnDetect.h"
@@ -49,6 +56,15 @@ void PageTurnAfterPaint(MainWindow* win, bool flushed) {
     if (gSettings->skeuomorphPageTurn) {
         WatchWindowChanges(win);
     }
+}
+
+// hook 16: a page SumatraPDF is still rendering shows its Rough Page, if
+// there is one, instead of blank paper and "Rendering page N..." (spec 3.10)
+bool PageTurnRoughPaint(MainWindow* win, HDC hdc, int pageNo, Rect bounds, int renderDelay) {
+    if (renderDelay == 0 || renderDelay == kRenderDelayFailed) {
+        return false;
+    }
+    return CurlRoughPaint(win, hdc, pageNo, bounds);
 }
 
 // hook 8: dm is going away, a new one may get its address

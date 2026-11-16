@@ -76,7 +76,7 @@
 #include "HexView.h"
 #include "PageGridDialogCommon.h"
 #include "MeasurementToolbar.h"
-#include "skeuomorph/PageTurnHooks.h"
+#include "skeuomorph/PageTurnHooks.h" // skeuomorph: hook after-paint
 #include "SumatraLog.h"
 
 // if set instead of trying to render pages we don't have, we simply do nothing
@@ -3097,7 +3097,7 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
     if (savedDC) {
         RestoreDC(hdc, savedDC);
     }
-    PageEdgesPaint(win, hdc, dm);
+    PageEdgesPaint(win, hdc, dm); // skeuomorph: hook edges-paint
 
     bool rendering = false;
     Rect screen(Point(), dm->GetViewPort().Size());
@@ -3147,6 +3147,10 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
             if (curTab) {
                 curTab->everPaintedPage = true;
             }
+        }
+        if (PageTurnRoughPaint(win, hdc, pageNo, bounds, renderDelay)) { // skeuomorph: hook rough-paint
+            shouldPaint = true;
+            continue;
         }
         if (renderDelay != 0) {
             PlatformFont* fontRightTxt = HdcCreateSimpleFont(hdc, StrL("MS Shell Dlg"), 14);
@@ -3326,7 +3330,7 @@ static void OnPaintDocument(MainWindow* win) {
         if (!gNoFlickerRender || shouldPaint || showFocus) {
             win->buffer->Flush(hdc);
         }
-        PageTurnAfterPaint(win, !gNoFlickerRender || shouldPaint || showFocus);
+        PageTurnAfterPaint(win, !gNoFlickerRender || shouldPaint || showFocus); // skeuomorph: hook after-paint
     }
     DrawCanvasKeyboardFocusIfNeeded(win, hdc);
 

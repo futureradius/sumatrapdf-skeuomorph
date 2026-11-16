@@ -2519,7 +2519,7 @@ const globalPrefsLayout = [
   "ReadAloudSpeed",
   "ReadingAutoScrollSpeed",
   "ReadingAutoScrollMinutes",
-  "SkeuomorphPageTurn",
+  "SkeuomorphPageTurn", // skeuomorph: hook settings
   "PageTurnDuration",
   "ReadingBar",
   "TabWidth",

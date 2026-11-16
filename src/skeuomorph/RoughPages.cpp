@@ -27,6 +27,8 @@ extern "C" {
 // spec 5.6: half the page's on-screen size, long side at most ~600 px
 constexpr float kRoughScale = 0.5f;
 constexpr float kRoughMaxPx = 600;
+// finished pictures nobody wishes for any more: the newest kept
+constexpr int kShelfMax = 16;
 
 // what the pictures look like: a change throws the finished ones away
 struct Look {
@@ -58,6 +60,7 @@ struct RoughPages {
     LONG refs = 1; // the owner's; the worker holds one more while it runs
     Mutex mutex;
     HANDLE wake = nullptr;
+    HWND hwnd = nullptr; // repainted when a page it shows is ready
     bool quit = false;
     bool started = false;
 
@@ -71,13 +74,17 @@ struct RoughPages {
     RoughWant wants[kMaxRoughWishes];
     int nWants = 0;
 
+    // UI thread -> worker: the Spread on screen until SumatraPDF draws it sharp
+    RoughWant shown[2];
+    int nShown = 0;
+
     // worker
     int drawing = 0;
     bool abortAsked = false;
     AbortCookie* cookie = nullptr; // set by the engine while it renders
     Vec<int> failed;
 
-    // worker -> drawing thread
+    // worker -> drawing and UI thread, oldest first
     Vec<Finished> finished;
 };
 
@@ -106,30 +113,62 @@ static void AbortDrawing(RoughPages* rp) {
     }
 }
 
+static bool OnScreen(RoughPages* rp, int page) {
+    for (int i = 0; i < rp->nShown; i++) {
+        if (rp->shown[i].page == page) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool Wished(RoughPages* rp, int page) {
     for (int i = 0; i < rp->nWants; i++) {
         if (rp->wants[i].page == page) {
             return true;
         }
     }
-    return false;
+    return OnScreen(rp, page);
 }
 
-static bool IsFinished(RoughPages* rp, int page) {
+static Finished* FindFinished(RoughPages* rp, int page) {
     for (Finished& f : rp->finished) {
         if (f.page == page) {
-            return true;
+            return &f;
         }
     }
-    return false;
+    return nullptr;
 }
 
-// under mutex: the first wish not finished and not failed
+// under mutex: the oldest ones nobody wishes for go, beyond kShelfMax
+static void Trim(RoughPages* rp) {
+    int extra = len(rp->finished) - kShelfMax;
+    for (int i = 0; i < len(rp->finished) && extra > 0;) {
+        if (Wished(rp, rp->finished[i].page)) {
+            i++;
+            continue;
+        }
+        FreePixmap(rp->finished[i].bmp);
+        VecRemoveAt(rp->finished, i);
+        extra--;
+    }
+}
+
+static bool Wanted(RoughPages* rp, RoughWant w) {
+    return !FindFinished(rp, w.page) && !VecContains(rp->failed, w.page);
+}
+
+// under mutex: the first wish not finished and not failed; the Curls' first,
+// then the Spread on screen
 static RoughWant NextWant(RoughPages* rp) {
     for (int i = 0; i < rp->nWants; i++) {
-        RoughWant w = rp->wants[i];
-        if (!IsFinished(rp, w.page) && !VecContains(rp->failed, w.page)) {
-            return w;
+        if (Wanted(rp, rp->wants[i])) {
+            return rp->wants[i];
+        }
+    }
+    for (int i = 0; i < rp->nShown; i++) {
+        if (Wanted(rp, rp->shown[i])) {
+            return rp->shown[i];
         }
     }
     return RoughWant();
@@ -266,11 +305,19 @@ static void Worker(RoughPages* rp) {
         if (failed) {
             VecAppend(rp->failed, w.page);
         }
+        bool repaint = false;
         if (keep && bmp) {
             VecAppend(rp->finished, Finished{w.page, bmp});
             bmp = nullptr;
+            Trim(rp);
+            repaint = OnScreen(rp, w.page);
         }
+        HWND hwnd = rp->hwnd;
         rp->mutex.Unlock();
+        // SumatraPDF's painting shows it until the sharp page is ready
+        if (repaint) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         delete cookie;
 
         Str what = keep ? StrL("done") : StrL("dropped");
@@ -286,8 +333,9 @@ static void Worker(RoughPages* rp) {
     Release(rp);
 }
 
-RoughPages* NewRoughPages() {
+RoughPages* NewRoughPages(HWND hwnd) {
     auto rp = new RoughPages();
+    rp->hwnd = hwnd;
     rp->wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     return rp;
 }
@@ -311,6 +359,7 @@ static void NewLook(RoughPages* rp, const Look& look) {
     rp->look = look;
     rp->gen++;
     rp->nWants = 0;
+    rp->nShown = 0;
     VecClear(rp->failed);
     for (Finished& f : rp->finished) {
         FreePixmap(f.bmp);
@@ -394,17 +443,25 @@ void RoughHide(RoughPages* rp) {
     }
 }
 
+// the drawing thread never waits for SumatraPDF's painting (RoughPaint):
+// busy, it tries again next frame. 0: busy
 int RoughGeneration(RoughPages* rp) {
-    rp->mutex.Lock();
+    if (!rp->mutex.TryLock()) {
+        return 0;
+    }
     int gen = rp->gen;
     rp->mutex.Unlock();
     return gen;
 }
 
 // replaces the wishes: a page no longer wished is aborted
-void RoughWish(RoughPages* rp, const RoughWant* wants, int n) {
+bool RoughWish(RoughPages* rp, const RoughWant* wants, int n, RoughWait wait) {
     n = std::min(n, kMaxRoughWishes);
-    rp->mutex.Lock();
+    if (wait == RoughWait::Block) {
+        rp->mutex.Lock();
+    } else if (!rp->mutex.TryLock()) {
+        return false;
+    }
     bool same = n == rp->nWants;
     for (int i = 0; same && i < n; i++) {
         same = wants[i].page == rp->wants[i].page;
@@ -416,29 +473,59 @@ void RoughWish(RoughPages* rp, const RoughWant* wants, int n) {
     if (rp->drawing && !Wished(rp, rp->drawing)) {
         AbortDrawing(rp);
     }
-    // finished ones nobody wants any more
-    for (int i = len(rp->finished) - 1; i >= 0; i--) {
-        if (!Wished(rp, rp->finished[i].page)) {
-            FreePixmap(rp->finished[i].bmp);
-            VecRemoveAt(rp->finished, i);
-        }
+    Trim(rp);
+    rp->mutex.Unlock();
+    if (!same) {
+        SetEvent(rp->wake);
     }
+    return true;
+}
+
+// a finished one, read in place: locked until RoughReturn. Null: none, not locked
+Pixmap* RoughBorrow(RoughPages* rp, int page) {
+    if (!rp->mutex.TryLock()) {
+        return nullptr;
+    }
+    Finished* f = FindFinished(rp, page);
+    if (!f) {
+        rp->mutex.Unlock();
+        return nullptr;
+    }
+    return f->bmp;
+}
+
+void RoughReturn(RoughPages* rp) {
+    rp->mutex.Unlock();
+}
+
+// UI thread, at every paint: the pages of the Spread on screen SumatraPDF
+// hasn't drawn sharp yet
+void RoughKeep(RoughPages* rp, const RoughWant* shown, int n) {
+    n = std::min(n, (int)dimof(rp->shown));
+    rp->mutex.Lock();
+    bool same = n == rp->nShown;
+    for (int i = 0; i < n; i++) {
+        same = same && shown[i].page == rp->shown[i].page;
+        rp->shown[i] = shown[i];
+    }
+    rp->nShown = n;
     rp->mutex.Unlock();
     if (!same) {
         SetEvent(rp->wake);
     }
 }
 
-Pixmap* RoughTake(RoughPages* rp, int page) {
-    Pixmap* bmp = nullptr;
+// UI thread: page's Rough Page stretched over pageRect, inside clip
+bool RoughPaint(RoughPages* rp, DisplayModel* dm, HDC hdc, int page, Rect pageRect, Rect clip) {
+    bool ok = false;
     rp->mutex.Lock();
-    for (int i = 0; i < len(rp->finished); i++) {
-        if (rp->finished[i].page == page) {
-            bmp = rp->finished[i].bmp;
-            VecRemoveAt(rp->finished, i);
-            break;
-        }
+    Finished* f = rp->look.dm == dm ? FindFinished(rp, page) : nullptr;
+    if (f) {
+        int saved = SaveDC(hdc);
+        IntersectClipRect(hdc, clip.x, clip.y, clip.Right(), clip.Bottom());
+        ok = BlitPixmap(f->bmp, hdc, pageRect);
+        RestoreDC(hdc, saved);
     }
     rp->mutex.Unlock();
-    return bmp;
+    return ok;
 }

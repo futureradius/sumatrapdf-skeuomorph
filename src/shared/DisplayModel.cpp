@@ -2211,7 +2211,7 @@ void DisplayModel::Relayout(float newZoomVirtual, int newRotation) {
     if (!pagesInfo) {
         return;
     }
-    cb->BeforeRelayout(this);
+    cb->BeforeRelayout(this); // skeuomorph: hook relayout
 
     rotation = NormalizeRotation(newRotation);
     zoomVirtual = newZoomVirtual;
@@ -2305,7 +2305,7 @@ void DisplayModel::Relayout(float newZoomVirtual, int newRotation) {
         params.freePan = freePan && !inPresentation;
         params.landscapeAsSpread = ShouldTreatLandscapeAsSpread();
         params.stepOnePage = StepsOnePage();
-        params.pageBesideSpine = pageBesideSpine;
+        params.pageBesideSpine = pageBesideSpine; // skeuomorph: hook beside-spine
         if (params.landscapeAsSpread) {
             EnsureSpreadFlags();
             params.spreadFlags = spreadFlags;
@@ -2954,7 +2954,7 @@ void DisplayModel::GoToPage(int pageNo, int scrollY, bool addNavPt, int scrollX)
     if (!IsContinuous(GetDisplayMode())) {
         /* in single page mode going to another page involves recalculating
            the size of canvas */
-        cb->BeforeSpreadChange(this, pageNo);
+        cb->BeforeSpreadChange(this, pageNo); // skeuomorph: hook spread-change
         ChangeStartPage(pageNo);
     } else if (IsFitContentZoom(zoomVirtual)) {
         // make sure that CalcZoomReal uses the correct page to calculate

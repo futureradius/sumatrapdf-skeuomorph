@@ -1041,7 +1041,7 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
 #endif
     }
 #if defined(SUMATRA_NG)
-    if (cmdId == CmdToggleSkeuomorphPageTurn) {
+    if (cmdId == CmdToggleSkeuomorphPageTurn) { // skeuomorph: hook hide-ng
         return CommandVisibility::Hide;
     }
 #endif

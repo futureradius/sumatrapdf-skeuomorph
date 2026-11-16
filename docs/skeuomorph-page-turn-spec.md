@@ -8,9 +8,10 @@ Words are used as defined in [GLOSSARY.md](../GLOSSARY.md): Paged View, Spread, 
 
 ## 1. Start here (every build session)
 
-**What this is.** A personal SumatraPDF fork that makes turning pages look like turning real paper, so the reader keeps a physical sense of *where they are in the book*. Judge every choice by that.
+**What this is.** A personal SumatraPDF fork that makes turning pages look like turning real paper, so the reader keeps a physical sense of _where they are in the book_. Judge every choice by that.
 
 **Read only this:**
+
 1. this spec,
 2. the **Built so far** list on the build parent issue, [Build: Skeuomorph Page Turn](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/26),
 3. your own build issue (and the last "where I stopped" comment on it, if any).
@@ -18,10 +19,12 @@ Words are used as defined in [GLOSSARY.md](../GLOSSARY.md): Paged View, Spread, 
 You don't need to read the map or the old tickets. Open one only if you need the "why" behind a rule.
 
 **The person driving this is not a programmer.**
+
 - Explain plainly and say what a result means.
 - Give exact copy-paste commands for Windows PowerShell 5.1: chain with `;`, never `&&`.
 
 **Repo rules**
+
 - Follow `agents.md`, except: **commit and push your own finished work without asking** (decided by the human on 2026-11-09; this overrides `agents.md`'s "never commit automatically").
 - Work on the `scrolling` branch.
 - Name test copies starting with `-for-testing`.
@@ -31,6 +34,7 @@ You don't need to read the map or the old tickets. Open one only if you need the
 **GitHub.** This clone also has the original SumatraPDF as `upstream`, so `gh` can silently hit the wrong project. Before any `gh` command, check that `gh repo set-default --view` prints `futureradius/sumatrapdf-skeuomorph`. If it doesn't, run `gh repo set-default futureradius/sumatrapdf-skeuomorph`, or pass `--repo futureradius/sumatrapdf-skeuomorph`.
 
 **Build**
+
 - MSBuild lives in `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\`.
 - Debug: `MSBuild.exe vs2022\SumatraPDF.sln /t:SumatraPDF /p:Configuration=Debug /p:Platform=x64 /m`. The program lands in `out\dbg64\SumatraPDF.exe`.
 - Release (for speed checks): the same command with `/p:Configuration=Release`.
@@ -38,12 +42,14 @@ You don't need to read the map or the old tickets. Open one only if you need the
 - New files in `src/skeuomorph/` reach the project files through `bin\premake5.exe vs2022`. That only adds them; no other changes.
 
 **Code generator** (for settings and commands)
+
 - Needs **bun**. The human consented to the one-time install on 2026-11-10: `powershell -c "irm bun.sh/install.ps1 | iex"`. bun stays a permanent requirement.
 - Run the generator through `src\skeuomorph\run-gen-code.bat`, not plain `bun cmd/gen-code.ts`. Besides bun it needs clang-format (MSBuild's folder), `cl.exe` (`vcvars64.bat`) and vswhere (the VS Installer folder) on PATH, and the batch file sets all of them up. Found in build step 1.
 - The generator's clang-format pass also reformats an unrelated array in `src/shared/EbookDoc.cpp`. Undo that with `git checkout src/shared/EbookDoc.cpp`. It also leaves a git-ignored `cmd/tmp/` folder.
 - Never edit the generated `src/Settings.*` and `src/shared/Commands.*` by hand. After upstream merges, fix conflicts there by re-running the generator.
 
 **Done for a build step** (before the next one starts):
+
 1. The debug build succeeds.
 2. All unit tests pass (`out\dbg64\SumatraPDF.exe -unit-tests`).
 3. That step's `tests/skeuomorph-*.ts` scripts pass (`bun tests/skeuomorph-<name>.ts`).
@@ -55,6 +61,7 @@ You don't need to read the map or the old tickets. Open one only if you need the
 **More than one step per session.** When a step is done and less than about half of the session's context is used, tell the human, claim the next build issue and carry on. Otherwise stop and say so. If a session runs out in the middle of a step, it still leaves SumatraPDF building, commits and pushes, and posts a short "where I stopped" comment on the issue, so the next session continues instead of starting over.
 
 **Test shelf.** `C:\code\test-shelf\` sits outside the repo and is never committed. The committed script from build step 1 fills it with:
+
 - generated numbered books: every page shows its number large, in its own colour; 1, 2, 3, 40 and 800 pages, plus one with mixed page sizes;
 - downloaded public-domain files: a right-to-left comic with double-page spreads, and an EPUB.
 
@@ -90,6 +97,7 @@ With the switch off, or in a Continuous View, the layout is exactly as in the or
 ### 3.2 Which page changes are a Page Turn
 
 **One action = one Page Turn.** Compare the Spread before the action with the Spread after it:
+
 - one Spread apart → a Curl;
 - more → a Bundle;
 - the same Spread → nothing.
@@ -97,6 +105,7 @@ With the switch off, or in a Continuous View, the layout is exactly as in the or
 Steps inside one action (next page ×3, a link that jumps twice) never show on their own. Each key repeat and each wheel notch is its own action.
 
 **These curl** (only in a Paged View with the switch on):
+
 - next/previous by keys, wheel, clicks or toolbar;
 - every jump: Go to page, table of contents (SumatraPDF's "Bookmarks"), Favorites, links, search results, Home/End, Back/Forward, thumbnails;
 - Read Aloud following the voice, and reading auto-scroll: ordinary Curls, with the fast-tapping speed-up if they turn quickly;
@@ -104,6 +113,7 @@ Steps inside one action (next page ×3, a link that jumps twice) never show on t
 - Presentation mode: Curls and Bundles, but no Page Edges.
 
 **These never curl.** The new Spread just appears, and the Page Edges update at once:
+
 - opening a document;
 - switching display mode (Single/Facing/Book, entering or leaving Presentation);
 - the `B` key;
@@ -122,13 +132,13 @@ Steps inside one action (next page ×3, a link that jumps twice) never show on t
 
 **Look: corner peel.** The page wraps over a cylinder lying on it. The bottom outer corner lifts first. The fold line starts slanted and straightens as it sweeps to the spine. Near the end the cylinder shrinks, so the page lands flat. A backward turn is the same Curl, mirrored.
 
-| Value | Chosen |
-|---|---|
-| Bend size | cylinder radius = 0.17 × page width; shrinks to 0 over the last 40% of the turn |
-| Corner lead | fold slant = 35° × (1 − p)^1.5, where p = 0.5 − 0.5·cos(π·t) and t = time progress 0..1 |
-| Shadow | 30%: soft, cast by lifted paper on the page below, only on paper, never on the background |
-| Light and shade on the bend | 30% |
-| 3D depth | 70%: perspective, camera distance ≈ 5.2 × window height, so lifted paper grows a little toward you |
+| Value                       | Chosen                                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------------- |
+| Bend size                   | cylinder radius = 0.17 × page width; shrinks to 0 over the last 40% of the turn                    |
+| Corner lead                 | fold slant = 35° × (1 − p)^1.5, where p = 0.5 − 0.5·cos(π·t) and t = time progress 0..1            |
+| Shadow                      | 30%: soft, cast by lifted paper on the page below, only on paper, never on the background          |
+| Light and shade on the bend | 30%                                                                                                |
+| 3D depth                    | 70%: perspective, camera distance ≈ 5.2 × window height, so lifted paper grows a little toward you |
 
 The exact maths is in the prototype on the throwaway branch `prototype/curl-look` (`prototypes/curl-look-prototype.html`); port it from there.
 
@@ -142,7 +152,7 @@ The exact maths is in the prototype on the throwaway branch `prototype/curl-look
 
 - **Every tap starts its own Curl,** so several pages can be in the air at different stages.
 - **Normal Curl length:** `PageTurnDuration` (700 ms by default). Curls are timed by the clock: a slow PC shows fewer frames, never a longer Curl.
-- **Fast tapping:** when taps come faster than one Curl lasts, every Curl in the air shortens to *gap between taps × 4*, but never below **310 ms**.
+- **Fast tapping:** when taps come faster than one Curl lasts, every Curl in the air shortens to _gap between taps × 4_, but never below **310 ms**.
   - Holding a key works the same way, through key repeat.
   - After tapping stops, the length eases back to normal.
   - If `PageTurnDuration` is below 310, fast tapping just keeps it.
@@ -154,14 +164,14 @@ The exact maths is in the prototype on the throwaway branch `prototype/curl-look
 
 ### 3.5 Bundles
 
-| Value | Chosen |
-|---|---|
-| Thickness | 0.70 px per page turned over, at most 18 px (reached at about 26 pages). Deliberately thicker than real paper, so the sheets read at Curl speed. A Bundle is not as thick as the paper it takes off the Page Edges. |
-| Sheets drawn | about 1 per 1.1 px of thickness, 2 to 14 |
+| Value                | Chosen                                                                                                                                                                                                                                                                                                            |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Thickness            | 0.70 px per page turned over, at most 18 px (reached at about 26 pages). Deliberately thicker than real paper, so the sheets read at Curl speed. A Bundle is not as thick as the paper it takes off the Page Edges.                                                                                               |
+| Sheets drawn         | about 1 per 1.1 px of thickness, 2 to 14                                                                                                                                                                                                                                                                          |
 | What the sheets show | the first sheet's front is the old page and the last sheet's back is the new page; the sheets between are blank paper. Revised by the human on 2026-11-15: the outer few sheets on each side (the ones you see) get Rough Pages in build step 8, at low resolution; only the hidden middle ones stay blank paper. |
-| Fan | 20%: each sheet starts a little after the one above, so they spread and land one after another |
-| Stiffness | 40% stiffer than one page: radius × (1 + 1.6 × 0.4), corner lead 35° × 0.6; full effect from 6 px thickness up |
-| Length | Curl length × 1.3 (910 ms by default) |
+| Fan                  | 20%: each sheet starts a little after the one above, so they spread and land one after another                                                                                                                                                                                                                    |
+| Stiffness            | 40% stiffer than one page: radius × (1 + 1.6 × 0.4), corner lead 35° × 0.6; full effect from 6 px thickness up                                                                                                                                                                                                    |
+| Length               | Curl length × 1.3 (910 ms by default)                                                                                                                                                                                                                                                                             |
 
 - **Lifting:** the Page Edges it leaves shrink while the Bundle's bottom sheet lifts off (the first 12% of that sheet's movement), not before.
 - **Landing:** the Page Edges it lands on grow over the last 18% of the turn.
@@ -183,6 +193,7 @@ Exact maths: prototype on the throwaway branch `prototype/bundles-edges` (`proto
 - **Presentation mode:** none.
 
 **The room beside the Spread**
+
 - **How wide:** on each side, this document's whole-book thickness, because on the last page all paper is on one side. Pages keep one size the whole time a document is read.
 - **Single Page:** room on both sides too, so the page stays centred. The left room stays empty background.
 - **It works like a wider window margin, at every zoom.** Fit Page and Fit Width shrink the pages to make room; at a fixed zoom such as 100%, pages keep their size and the room sits beside them.
@@ -237,6 +248,7 @@ Exact maths: prototype on the throwaway branch `prototype/bundles-edges` (`proto
   - closing the document, minimizing, the switch turned off.
 
   The layer disappears, SumatraPDF shows the final Spread, and the Page Edges snap. Nothing replays when you come back.
+
 - **Keep playing** when the document area stays the same: moving the window, clicking into another program, a window or menu covering part of SumatraPDF. Curls also keep playing while a menu or dialog is open.
 - **Switch off mid-Curl:** everything lands, the Page Edges and their room disappear, and the cover goes back to the centre (one layout jump).
 - **Switch on:** no Curl. The Page Edges and their room just appear.
@@ -251,19 +263,19 @@ Exact maths: prototype on the throwaway branch `prototype/bundles-edges` (`proto
 
 ## 4. Numbers in one place
 
-| What | Value |
-|---|---|
-| Normal Curl length | `PageTurnDuration`, default 700 ms, clamped 100-5000 |
-| Fast tapping | gap × 4, never below 310 ms |
-| In the air at most | 5 (Curls and Bundles together) |
-| Curl bend / corner lead | radius 0.17 × page width, shrinking over the last 40%; 35° × (1 − p)^1.5 |
-| Curl shadow / shading / depth | 30% / 30% / 70% (camera ≈ 5.2 × window height) |
-| Bundle | 0.70 px per page, at most 18 px; 2-14 sheets (1 per 1.1 px); fan 20%; 40% stiffer; length × 1.3 |
-| Bundle Page Edges | shrink over the first 12% of the bottom sheet's lift; grow over the last 18% of the turn |
-| Page Edges | whole book √(pages × 0.12 × 46), clamped 4-46 px; room = that on each side |
-| Rough Page size | half the page's on-screen size, long side at most ~600 px, same shape |
-| Rough Page wish list | at most 10 faces (5 in the air × 2) |
-| GPU memory budget | about 100 MB at 1920×1200, 300-350 MB at 4K (measured worst cases 95 / 298 MB) |
+| What                          | Value                                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| Normal Curl length            | `PageTurnDuration`, default 700 ms, clamped 100-5000                                            |
+| Fast tapping                  | gap × 4, never below 310 ms                                                                     |
+| In the air at most            | 5 (Curls and Bundles together)                                                                  |
+| Curl bend / corner lead       | radius 0.17 × page width, shrinking over the last 40%; 35° × (1 − p)^1.5                        |
+| Curl shadow / shading / depth | 30% / 30% / 70% (camera ≈ 5.2 × window height)                                                  |
+| Bundle                        | 0.70 px per page, at most 18 px; 2-14 sheets (1 per 1.1 px); fan 20%; 40% stiffer; length × 1.3 |
+| Bundle Page Edges             | shrink over the first 12% of the bottom sheet's lift; grow over the last 18% of the turn        |
+| Page Edges                    | whole book √(pages × 0.12 × 46), clamped 4-46 px; room = that on each side                      |
+| Rough Page size               | half the page's on-screen size, long side at most ~600 px, same shape                           |
+| Rough Page wish list          | at most 10 faces (5 in the air × 2)                                                             |
+| GPU memory budget             | about 100 MB at 1920×1200, 300-350 MB at 4K (measured worst cases 95 / 298 MB)                  |
 
 ---
 
@@ -273,16 +285,16 @@ Exact maths: prototype on the throwaway branch `prototype/bundles-edges` (`proto
 
 All new code goes in `src/skeuomorph/`. The suggested split:
 
-| File | Job |
-|---|---|
-| `PageTurnHooks.h/.cpp` | the only header original files include; thin forwards |
-| `PageTurnLogic` | pure decisions with no Windows calls: Curl/Bundle/nothing, fingerprint, timing, fast tapping, the at-most-5 rule, thicknesses, direction. Unit-tested. |
-| `PageEdges` | the room beside the Spread, the cover flag, GDI drawing of resting Page Edges |
-| `ScreenCopy` | the only code that reads `win->buffer` |
-| `CurlLayer` | DirectComposition layer per window |
-| `CurlRenderer` | the drawing thread, Direct3D 11, meshes, precompiled shader bytes |
-| `RoughPages` | the background copy, the worker thread, the wish list, copied colour helpers |
-| `FlashRecorder` | test-only tool, never in the everyday build |
+| File                   | Job                                                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PageTurnHooks.h/.cpp` | the only header original files include; thin forwards                                                                                                  |
+| `PageTurnLogic`        | pure decisions with no Windows calls: Curl/Bundle/nothing, fingerprint, timing, fast tapping, the at-most-5 rule, thicknesses, direction. Unit-tested. |
+| `PageEdges`            | the room beside the Spread, the cover flag, GDI drawing of resting Page Edges                                                                          |
+| `ScreenCopy`           | the only code that reads `win->buffer`                                                                                                                 |
+| `CurlLayer`            | DirectComposition layer per window                                                                                                                     |
+| `CurlRenderer`         | the drawing thread, Direct3D 11, meshes, precompiled shader bytes                                                                                      |
+| `RoughPages`           | the background copy, the worker thread, the wish list, copied colour helpers                                                                           |
+| `FlashRecorder`        | test-only tool, never in the everyday build                                                                                                            |
 
 Unit tests go in `tests/PageTurn_ut.cpp` (or next to the logic), and scripts in `tests/skeuomorph-*.ts`. Shader sources and the one-off `fxc` script also live in `src/skeuomorph/`.
 
@@ -290,24 +302,27 @@ Unit tests go in `tests/PageTurn_ut.cpp` (or next to the logic), and scripts in 
 
 On `scrolling` at `1d0b75378`, "insert after" the line. "Both" means built by classic and ng; in ng the line does nothing. Full table with reasons: [research/hook-points.md](https://github.com/futureradius/sumatrapdf-skeuomorph/blob/research/hook-points/research/hook-points.md). ([Where does the new code hook in, and how few original lines change?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/17); ADR [0003](adr/0003-new-code-in-its-own-folder-behind-two-hooks.md))
 
-| # | What | Where | Built by | Change | Lines | Step |
-|---|---|---|---|---|---|---|
-| 1 | Seam | `src/shared/DocController.h:78` | both | two empty `virtual` methods on `DocControllerCallback`: `BeforeSpreadChange(DisplayModel*, int)`, `BeforeRelayout(DisplayModel*)` | +2 | 2 |
-| 2 | Seam, classic side | `src/SumatraPDF.cpp:966` (+ include) | classic | two `override` one-liners into the new code | +3 | 2 |
-| 3 | Start a Page Turn, copy old screen | `src/shared/DisplayModel.cpp:2954`, just before `ChangeStartPage` | both | `cb->BeforeSpreadChange(this, pageNo);` | +1 | 2 |
-| 4 | Room for Page Edges, cover flag | `src/shared/DisplayModel.cpp:2217`, start of `Relayout` | both | `cb->BeforeRelayout(this);` | +1 | 3 |
-| 5 | Draw resting Page Edges | `src/Canvas.cpp:3098`, after the background, before pages | classic | `PageEdgesPaint(win, hdc, dm);` | +1 | 3 |
-| 6 | What the screen really shows | `src/Canvas.cpp:3326`, after the flush (+ include) | classic | `PageTurnAfterPaint(win, <same flush condition>);` | +2 | 2 |
-| 7 | Cover right of spine, lone last page left | `DocumentLayout.h:43`, `DocumentLayout.cpp:289` + change `:309`, `DisplayModel.h:431`, `DisplayModel.cpp:2306` | both | `pageBesideSpine` flag, default off | +6, 1 changed | 3 |
-| 8 | Forget a closed document | `src/SumatraPDF.cpp:1079` (`CleanUp`) | classic | one call | +1 | 2 |
-| 9 | Settings | `cmd/gen-settings.ts:2015`, `globalPrefsLayout` | classic generator | two `field(...)` | +14 | 1 |
-| 10 | Command | `cmd/gen-commands.ts:384` | both | one entry at the end | +1 | 1 |
-| 11 | View-menu entry | `src/shared/MenuDefs.cpp:354` | both | one entry | +4 | 1 |
-| 12 | Hide in ng | `src/shared/CommandAvailability.cpp:1043` | both | `SUMATRA_NG` → hide, like `CmdMeasure` | +5 | 1 |
-| 13 | Checkmark | `src/Menu.cpp:956` | classic | `MenuSetChecked` | +1 | 1 |
-| 14 | Click handler | `src/SumatraPDF.cpp:12098` | classic | `case` into the new code, which also calls `ScheduleSaveSettings()` | +3 | 1 |
-| 15 | Build the new folder | `premake5.files.lua:493` | classic | `files_in_dir("src/skeuomorph", ...)` | +1 | 1 |
-| | **Total** | 13 files | | | **+46, 1 changed** | |
+| #   | What                                        | Where                                                                                                          | Built by          | Change                                                                                                                            | Lines              | Step |
+| --- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ---- |
+| 1   | Seam                                        | `src/shared/DocController.h:78`                                                                                | both              | two empty `virtual` methods on `DocControllerCallback`: `BeforeSpreadChange(DisplayModel*, int)`, `BeforeRelayout(DisplayModel*)` | +2                 | 2    |
+| 2   | Seam, classic side                          | `src/SumatraPDF.cpp:966` (+ include)                                                                           | classic           | two `override` one-liners into the new code                                                                                       | +3                 | 2    |
+| 3   | Start a Page Turn, copy old screen          | `src/shared/DisplayModel.cpp:2954`, just before `ChangeStartPage`                                              | both              | `cb->BeforeSpreadChange(this, pageNo);`                                                                                           | +1                 | 2    |
+| 4   | Room for Page Edges, cover flag             | `src/shared/DisplayModel.cpp:2217`, start of `Relayout`                                                        | both              | `cb->BeforeRelayout(this);`                                                                                                       | +1                 | 3    |
+| 5   | Draw resting Page Edges                     | `src/Canvas.cpp:3098`, after the background, before pages                                                      | classic           | `PageEdgesPaint(win, hdc, dm);`                                                                                                   | +1                 | 3    |
+| 6   | What the screen really shows                | `src/Canvas.cpp:3326`, after the flush (+ include)                                                             | classic           | `PageTurnAfterPaint(win, <same flush condition>);`                                                                                | +2                 | 2    |
+| 7   | Cover right of spine, lone last page left   | `DocumentLayout.h:43`, `DocumentLayout.cpp:289` + change `:309`, `DisplayModel.h:431`, `DisplayModel.cpp:2306` | both              | `pageBesideSpine` flag, default off                                                                                               | +6, 1 changed      | 3    |
+| 8   | Forget a closed document                    | `src/SumatraPDF.cpp:1079` (`CleanUp`)                                                                          | classic           | one call                                                                                                                          | +1                 | 2    |
+| 9   | Settings                                    | `cmd/gen-settings.ts:2015`, `globalPrefsLayout`                                                                | classic generator | two `field(...)`                                                                                                                  | +14                | 1    |
+| 10  | Command                                     | `cmd/gen-commands.ts:384`                                                                                      | both              | one entry at the end                                                                                                              | +1                 | 1    |
+| 11  | View-menu entry                             | `src/shared/MenuDefs.cpp:354`                                                                                  | both              | one entry                                                                                                                         | +4                 | 1    |
+| 12  | Hide in ng                                  | `src/shared/CommandAvailability.cpp:1043`                                                                      | both              | `SUMATRA_NG` → hide, like `CmdMeasure`                                                                                            | +5                 | 1    |
+| 13  | Checkmark                                   | `src/Menu.cpp:956`                                                                                             | classic           | `MenuSetChecked`                                                                                                                  | +1                 | 1    |
+| 14  | Click handler                               | `src/SumatraPDF.cpp:12098`                                                                                     | classic           | `case` into the new code, which also calls `ScheduleSaveSettings()`                                                               | +3                 | 1    |
+| 15  | Build the new folder                        | `premake5.files.lua:493`                                                                                       | classic           | `files_in_dir("src/skeuomorph", ...)`                                                                                             | +1                 | 1    |
+| 16  | A page still rendering shows its Rough Page | `src/Canvas.cpp`, `DrawDocument`, before the "Rendering page N..." block                                       | classic           | `PageTurnRoughPaint(...)`, approved by the human on 2026-11-16                                                                    | +4                 | 8    |
+|     | **Total**                                   | 13 files                                                                                                       |                   |                                                                                                                                   | **+50, 1 changed** |      |
+
+**The current hooks, for merging upstream:** [skeuomorph-hooks.md](skeuomorph-hooks.md) lists each one by the code it sits next to (line numbers above are from `1d0b75378` and drift), with the merge steps. Hook lines carry a `// skeuomorph: hook <name>` tag; `bun tests/skeuomorph-hooks.ts` checks they're all there. A new hook goes into that file too.
 
 Allowed extra: unit-test registration in `src/tests/Sumatra_ut.cpp` (+2, debug only, step 2). Also `SwitchToDisplayMode` in `src/SumatraPDF.cpp` (+1, step 3, approved by the human on 2026-11-10): it stops a running smooth scroll, which otherwise kept scrolling to the old Continuous target and left the view blank (an upstream bug). Models to copy: the setting is like `ReadingAutoScrollSpeed`; the switch is like `HighlightFormFields` / `CmdToggleHighlightFormFields`, saved at once like `CmdToggleDisableLinks`. Read `gSettings` only in classic-only files. ([How are settings and View-menu switches added?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/7))
 
@@ -343,12 +358,14 @@ Code paths and non-turn callers: [research/page-turn-code-paths.md](https://gith
 ADR [0001](adr/0001-curls-on-their-own-layer.md) covers the choice; [0005](adr/0005-repaint-waits-for-first-curl-frame.md) covers the flash rule.
 
 **The layer**
+
 - A DirectComposition visual on `hwndCanvas`, with `topmost = FALSE`, so form and annotation edit boxes stay on top.
 - A composition swap chain, drawn with Direct3D 11 as a cylinder/cone mesh textured with page pictures, clipped to the document area.
 - **Default graphics adapter** (not the discrete GPU).
 - `dcomp.dll`, `d3d11.dll` and `d2d1.dll` are loaded by hand. `dcomp.h` needs the `NTDDI_VERSION` trick from `src/shared/PrintWin11.cpp:34-52`. If anything fails, Page Turns are instant jumps ([3.11](#311-window-changes-mid-curl-and-where-curls-cant-play)).
 
 **The drawing thread**
+
 - One drawing thread per window owns Direct3D and every `Present`, fed through a locked command queue.
 - When idle it sleeps. While Curls play it waits on the swap chain's frame-latency handle, draws from the clock, then `Present(1, 0)`.
 - No `SetTimer`, no compositor clock.
@@ -356,11 +373,13 @@ ADR [0001](adr/0001-curls-on-their-own-layer.md) covers the choice; [0005](adr/0
 **Setup:** Direct3D and the layer are set up on the drawing thread at the first Paged View paint with the switch on (25-40 ms there, 0.1 ms on the UI thread). Shaders are **precompiled** with `fxc` by a one-off committed script, and the bytes are committed; re-run it only when a shader changes.
 
 **Showing the layer**
+
 - The layer is shown **on demand**, not kept attached.
 - **The no-flash rule:** the posted task waits until the swap chain's next frame signal says the layer's first frame is on screen (9-12 ms, at most ~35 ms at 4K). Only then does SumatraPDF's repaint run.
 - **Removing it:** the layer goes see-through, then away, one screen refresh after SumatraPDF really shows the new Spread or its message (hook 6, `flushed == true`). Until then, uncovered parts are blank paper. The layer's last frame matches SumatraPDF's pixel for pixel.
 
 **Screen copies**
+
 - GDI copies straight into a GDI-compatible GPU image, on the drawing thread, while the UI thread waits.
 - Copy the old Spread and only the landing page of the new one. Never keep a pointer into `win->buffer` (it's recreated on resize).
 - At 4K a copy costs about a frame. Spread copies between frames where possible.
@@ -370,6 +389,7 @@ ADR [0001](adr/0001-curls-on-their-own-layer.md) covers the choice; [0005](adr/0
 **Window changes:** subclass the canvas (`SetWindowSubclass`: `WM_SIZE`, `WM_NCDESTROY`, ...) to land Curls instantly and resize or destroy the layer ([3.11](#311-window-changes-mid-curl-and-where-curls-cant-play)).
 
 **Background reading**
+
 - [Which drawing technology can show a realistic Curl smoothly?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/6)
 - [Can a Curl layer run smoothly on this PC?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/14)
 - [Can the Curl layer cover a jump with no flash?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/19)
@@ -380,10 +400,12 @@ ADR [0001](adr/0001-curls-on-their-own-layer.md) covers the choice; [0005](adr/0
 ADR [0002](adr/0002-rough-pages-from-a-background-copy.md) covers the choice.
 
 **Where they come from**
+
 - Never through SumatraPDF's render queue.
 - One worker thread per window, at below-normal priority, draws them from a **background copy of the document** (`Clone()`, as `src/PageThumbnails.cpp` does).
 
 **The wish list** (rebuilt on every tap and landing)
+
 - **One at a time.** At most 10 faces: oldest Curl first, and within a Curl the face that shows first.
 - **Skip** faces that already have a sharp picture or a Rough Page, and everything inside a Bundle.
 - **Cancel by forgetting:** when a Curl lands or a face leaves the screen, drop it. If it's the one being drawn, abort it and throw the result away. Faces of the Spread landed on stay until SumatraPDF draws them sharp.
@@ -394,6 +416,7 @@ ADR [0002](adr/0002-rough-pages-from-a-background-copy.md) covers the choice.
 **Colours:** dark mode, grayscale and brightness are applied by helpers **copied** from `src/shared/RenderCache.cpp:54-160` into `src/skeuomorph/`.
 
 **The background copy**
+
 - Made when a document shows in a Paged View with the switch on and the layer loaded.
 - Closed when it leaves the screen (tab closed or switched away from, Continuous View, switch off). Made fresh after a save or reload.
 - Its image cache is emptied after each Rough Page.
@@ -403,6 +426,7 @@ ADR [0002](adr/0002-rough-pages-from-a-background-copy.md) covers the choice.
 - Check why some memory isn't returned when the copy closes (seen in testing); don't block on it.
 
 **Background reading**
+
 - [How can Rough Pages share the render queue without slowing the landing?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/18)
 - [How fast do Rough Pages arrive, and how much memory do Curls need?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/20)
 - [Is a background copy of each document acceptable for Rough Pages?](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/22)
@@ -418,6 +442,7 @@ ADR [0002](adr/0002-rough-pages-from-a-background-copy.md) covers the choice.
 **Flash recorder:** a test-only tool, ported from `spike/no-flash` in step 4. Used by steps that change what's on screen.
 
 **Pixel comparison:** once, after step 3, against the version from before:
+
 - every view, switch off;
 - Continuous views also with the switch on;
 - must match pixel for pixel.
@@ -443,13 +468,13 @@ The script stays in the repo for reruns.
 
 Issues are sub-issues of [Build: Skeuomorph Page Turn](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/26), each blocked by the one before. "Lines" is the step's share of the original-line budget.
 
-| Step | Delivers | Spec sections | Lines |
-|---|---|---|---|
-| 1. [Switch, speed setting and test shelf](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/27) | bun installed; both settings; View-menu item (hidden in ng); empty `src/skeuomorph/` in the build; test-shelf script | 1, 3.1, 5.2 #9-15 | 29 |
-| 2. [Page Turn detection, no drawing yet](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/28) | seam; start-of-turn hook; one action = one turn; don't-animate fingerprint; Curl/Bundle/nothing; fast-tap timing; at most 5; right-to-left direction; per-turn log; unit tests; first scripts | 3.2, 3.4, 3.9, 4, 5.2 #1-3, #6, #8, 5.3 | 9 (+2 tests) |
-| 3. [Page Edges at rest and the cover beside the spine](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/29) | room beside the Spread; resting Page Edges (Single Page unread only, mirrored, none in Presentation); cover and lone last page beside the spine; switch on/off re-layout; pixel comparison | 2, 3.6, 3.7 (layout), 3.9, 5.2 #4, #5, #7, 5.4 | 8, 1 changed |
-| 4. [One plain Curl with no flash](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/30) | Curl layer; drawing thread; precompiled shaders; screen copies; holding the repaint; a simple cylinder Curl, one page at a time; land instantly on window changes; instant jump where the layer can't load; flash recorder | 3.10 (1, 2, 4), 3.11, 5.5, 5.7 | 0 |
-| 5. [The real Curl look](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/31) | corner peel, shadow, shading, 3D depth; backward turns; Single Page fade; right-to-left mirroring; different-size pages changing shape; wide pages folding at the spine | 3.3, 3.8, 3.9 | 0 |
-| 6. [Several Curls at once and fast tapping](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/32) | up to 5 in the air; gap × 4 / 310 ms; backward tap sends a page back; freeing pictures; memory budget; Release speed check | 3.4, 4, 5.5 (memory) | 0 |
-| 7. [Bundles](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/33) | sheets, fan, stiffness; Page Edges shrink and grow (drawn by the layer); splitting the last sheet; a new jump lands pages in the air; no spine shadow (dropped); the cover's blank slate; EPUB page-count changes | 3.5, 3.6 (moving), 3.7, 3.8 | 0 |
-| 8. [Rough Pages](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/34) | background copy; worker thread; wish list; ~600 px cap; copied colour helpers; image cache emptying; landing on a Rough Page; Release speed check on the test-shelf scans | 3.10, 5.6 | 0 |
+| Step                                                                                                                    | Delivers                                                                                                                                                                                                                   | Spec sections                                  | Lines                            |
+| ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------- |
+| 1. [Switch, speed setting and test shelf](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/27)              | bun installed; both settings; View-menu item (hidden in ng); empty `src/skeuomorph/` in the build; test-shelf script                                                                                                       | 1, 3.1, 5.2 #9-15                              | 29                               |
+| 2. [Page Turn detection, no drawing yet](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/28)               | seam; start-of-turn hook; one action = one turn; don't-animate fingerprint; Curl/Bundle/nothing; fast-tap timing; at most 5; right-to-left direction; per-turn log; unit tests; first scripts                              | 3.2, 3.4, 3.9, 4, 5.2 #1-3, #6, #8, 5.3        | 9 (+2 tests)                     |
+| 3. [Page Edges at rest and the cover beside the spine](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/29) | room beside the Spread; resting Page Edges (Single Page unread only, mirrored, none in Presentation); cover and lone last page beside the spine; switch on/off re-layout; pixel comparison                                 | 2, 3.6, 3.7 (layout), 3.9, 5.2 #4, #5, #7, 5.4 | 8, 1 changed                     |
+| 4. [One plain Curl with no flash](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/30)                      | Curl layer; drawing thread; precompiled shaders; screen copies; holding the repaint; a simple cylinder Curl, one page at a time; land instantly on window changes; instant jump where the layer can't load; flash recorder | 3.10 (1, 2, 4), 3.11, 5.5, 5.7                 | 0                                |
+| 5. [The real Curl look](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/31)                                | corner peel, shadow, shading, 3D depth; backward turns; Single Page fade; right-to-left mirroring; different-size pages changing shape; wide pages folding at the spine                                                    | 3.3, 3.8, 3.9                                  | 0                                |
+| 6. [Several Curls at once and fast tapping](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/32)            | up to 5 in the air; gap × 4 / 310 ms; backward tap sends a page back; freeing pictures; memory budget; Release speed check                                                                                                 | 3.4, 4, 5.5 (memory)                           | 0                                |
+| 7. [Bundles](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/33)                                           | sheets, fan, stiffness; Page Edges shrink and grow (drawn by the layer); splitting the last sheet; a new jump lands pages in the air; no spine shadow (dropped); the cover's blank slate; EPUB page-count changes          | 3.5, 3.6 (moving), 3.7, 3.8                    | 0                                |
+| 8. [Rough Pages](https://github.com/futureradius/sumatrapdf-skeuomorph/issues/34)                                       | background copy; worker thread; wish list; ~600 px cap; copied colour helpers; image cache emptying; landing on a Rough Page; Release speed check on the test-shelf scans                                                  | 3.10, 5.6                                      | 4 (hook 16, approved 2026-11-16) |

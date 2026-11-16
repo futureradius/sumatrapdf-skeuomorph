@@ -76,8 +76,8 @@ struct DocControllerCallback {
     // (re)laid out; refresh anything keyed by pageNo (selection, find, toolbar,
     // toc selection)
     virtual void PagesRenumbered(DisplayModel* dm) = 0;
-    virtual void BeforeSpreadChange(DisplayModel*, int) {}
-    virtual void BeforeRelayout(DisplayModel*) {}
+    virtual void BeforeSpreadChange(DisplayModel*, int) {} // skeuomorph: hook seam
+    virtual void BeforeRelayout(DisplayModel*) {} // skeuomorph: hook seam
 };
 
 struct DocController;

@@ -78,7 +78,7 @@
 #include "Commands.h"
 #include "Flags.h"
 #include "AppSettings.h"
-#include "skeuomorph/PageTurnHooks.h"
+#include "skeuomorph/PageTurnHooks.h" // skeuomorph: hook seam-classic
 #include "AppTools.h"
 #include "Canvas.h"
 #include "RefHover.h"
@@ -1081,7 +1081,7 @@ void ControllerCallbackHandler::RequestPredictiveRendering(DisplayModel* dm, int
 void ControllerCallbackHandler::CleanUp(DisplayModel* dm) {
     gRenderCache->CancelRenderingBlocking(dm);
     gRenderCache->FreeForDisplayModel(dm);
-    PageTurnForget(win, dm);
+    PageTurnForget(win, dm); // skeuomorph: hook forget
 }
 
 // ~DisplayModel waits for in-flight renders (CleanUp -> CancelRenderingBlocking)
@@ -12101,7 +12101,7 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             }
             break;
 
-        case CmdToggleSkeuomorphPageTurn:
+        case CmdToggleSkeuomorphPageTurn: // skeuomorph: hook click
             ToggleSkeuomorphPageTurn();
             break;
 

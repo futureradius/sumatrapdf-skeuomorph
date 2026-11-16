@@ -282,7 +282,7 @@ constexpr int kRoughKept = 16;
 constexpr int kRoughPlaced = 64;
 constexpr int kRoughWishMax = 64;
 // uploading one takes about 1 ms: at most this many per frame
-constexpr int kRoughUploads = 2;
+constexpr int kRoughUploads = 1;
 // a Bundle's outer sheets on each side show Rough Pages; the hidden middle
 // ones stay blank paper (spec 3.5)
 constexpr int kRoughSheets = 2;
@@ -1171,7 +1171,7 @@ static void RoughFrameStart(Gpu& g, double now) {
         return;
     }
     int gen = RoughGeneration(rs.pages);
-    if (gen != rs.gen) {
+    if (gen != 0 && gen != rs.gen) {
         rs.gen = gen;
         for (RoughTex& k : rs.kept) {
             k = RoughTex();
@@ -1183,7 +1183,7 @@ static void RoughFrameStart(Gpu& g, double now) {
         if (FindKept(rs, page)) {
             continue;
         }
-        Pixmap* bmp = RoughTake(rs.pages, page);
+        Pixmap* bmp = RoughBorrow(rs.pages, page);
         if (!bmp) {
             continue;
         }
@@ -1194,7 +1194,7 @@ static void RoughFrameStart(Gpu& g, double now) {
             slot->page = page;
             slot->usedAt = now;
         }
-        FreePixmap(bmp);
+        RoughReturn(rs.pages);
     }
 }
 
@@ -1217,7 +1217,7 @@ static void RoughFrameEnd(Gpu& g) {
         }
     }
     rs.nAsked = n;
-    RoughWish(rs.pages, rs.asked, n);
+    RoughWish(rs.pages, rs.asked, n, RoughWait::Try);
 }
 
 // nothing in the air: the worker stops
@@ -1225,7 +1225,7 @@ static void RoughStop(Gpu& g) {
     Roughs& rs = g.rough;
     if (rs.pages && rs.nAsked > 0) {
         rs.nAsked = 0;
-        RoughWish(rs.pages, nullptr, 0);
+        RoughWish(rs.pages, nullptr, 0, RoughWait::Block);
     }
 }
 
@@ -2954,7 +2954,7 @@ void CurlEnsure(MainWindow* win) {
     r->covered = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     r->gone = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     r->desk = NewScreenCopyDesk(r->wake);
-    r->rough = NewRoughPages();
+    r->rough = NewRoughPages(r->hwnd);
     VecAppend(gRenderers, r);
 
     r->thread = StartThread(MkFunc0<Renderer>(DrawThread, r), StrL("CurlDrawing"));
@@ -3099,17 +3099,45 @@ void CurlWindowShowsNew(MainWindow* win, CurlSpread now) {
 
 // at every paint: a background copy of the document for Rough Pages while it
 // shows in a Paged View with the switch on and the layer loaded; dm null: the
-// copy closes
-void CurlRough(MainWindow* win, DisplayModel* dm) {
+// copy closes. Pages of shown not yet sharp get Rough Pages too
+void CurlRough(MainWindow* win, DisplayModel* dm, const CurlSpread& shown) {
     Renderer* r = FindRenderer(win);
     if (!r) {
         return;
     }
-    if (dm && IsLoaded(r)) {
-        RoughShow(r->rough, dm);
-    } else {
+    if (!dm || !IsLoaded(r)) {
         RoughHide(r->rough);
+        return;
     }
+    RoughShow(r->rough, dm);
+    RoughWant keep[2];
+    int n = 0;
+    for (int side = kLeft; side <= kRight; side++) {
+        int page = shown.pages[side];
+        bool twice = n > 0 && keep[0].page == page;
+        if (page > 0 && !shown.sharp[side] && !twice) {
+            keep[n++] = {page, shown.zoom};
+        }
+    }
+    RoughKeep(r->rough, keep, n);
+}
+
+// hook 16: SumatraPDF still renders pageNo; its Rough Page shows meanwhile
+bool CurlRoughPaint(MainWindow* win, HDC hdc, int pageNo, Rect bounds) {
+    Renderer* r = FindRenderer(win);
+    DisplayModel* dm = win->AsFixed();
+    PageInfo* pi = dm ? dm->GetPageInfo(pageNo) : nullptr;
+    if (!r || !pi) {
+        return false;
+    }
+    bool painted = RoughPaint(r->rough, dm, hdc, pageNo, pi->pageOnScreen, bounds);
+    // once per page in a row, for tests/skeuomorph-rough.ts
+    static int lastLogged = 0;
+    if (IS_DEBUG && painted && pageNo != lastLogged) {
+        logf("skeuomorph-rough: page %d shown by SumatraPDF until sharp\n", pageNo);
+    }
+    lastLogged = painted ? pageNo : lastLogged;
+    return painted;
 }
 
 // lands everything at once: the layer disappears now

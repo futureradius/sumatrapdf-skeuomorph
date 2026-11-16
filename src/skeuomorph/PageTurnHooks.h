@@ -13,3 +13,4 @@ void PageTurnBeforeRelayout(MainWindow* win, DisplayModel* dm);
 void PageEdgesPaint(MainWindow* win, HDC hdc, DisplayModel* dm);
 void PageTurnAfterPaint(MainWindow* win, bool flushed);
 void PageTurnForget(MainWindow* win, DisplayModel* dm);
+bool PageTurnRoughPaint(MainWindow* win, HDC hdc, int pageNo, Rect bounds, int renderDelay);

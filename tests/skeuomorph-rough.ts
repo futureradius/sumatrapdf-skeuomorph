@@ -13,6 +13,9 @@
 // 3. A Bundle (End): its outer sheets get Rough Pages of pages in between.
 // 4. A scan from the test shelf, held Page Down: printed, not judged (speed
 //    depends on the PC; the Release speed check is separate).
+// 5. Big scans, opened and tapped through: a page SumatraPDF is still
+//    rendering shows its Rough Page in SumatraPDF's own painting until sharp:
+//      skeuomorph-rough: page 48 shown by SumatraPDF until sharp
 //
 // Uses books from the test shelf (C:\code\test-shelf), read only. Settings
 // live in a throwaway -appdata folder.
@@ -28,6 +31,12 @@ import type { ControlClient } from "./control.ts";
 
 const BOOK = "C:\\code\\test-shelf\\generated\\numbered-800-pages.pdf";
 const SCAN = "C:\\code\\test-shelf\\Albertii - De re ædificatoria.pdf";
+const BIG_SCANS = [
+  "C:\\code\\test-shelf\\Garcia_Physical-sec.pdf",
+  "C:\\code\\test-shelf\\Manual-of-Multistorey-Timber-Construction-pdf.pdf",
+];
+const LANDING_TAPS = 4;
+const LANDING_GAP_MS = 1500;
 
 const VK_END = 0x23;
 const KEY_REPEAT = 1 << 30;
@@ -219,6 +228,41 @@ async function scan(): Promise<void> {
   }
 }
 
+// single taps on big scans: SumatraPDF takes long to draw these pages sharp,
+// so a landed page shows its Rough Page meanwhile (hook rough-paint)
+async function landing(): Promise<void> {
+  const scans = BIG_SCANS.filter((p) => existsSync(p));
+  if (scans.length === 0) {
+    console.log("skeuomorph-rough: landing skipped, no big scans on the test shelf");
+    return;
+  }
+  const shown: string[] = [];
+  for (const [i, path] of scans.entries()) {
+    const { proc, s } = await open(path, `land-${i}`);
+    try {
+      // opening counts too: the first Spread is rendering as well
+      const lines = await s.waitFor(/skeuomorph-rough: background copy/, COPY_WAIT_MS);
+      await s.settle();
+      for (let k = 0; k < LANDING_TAPS; k++) {
+        s.key(VK_NEXT);
+        await sleep(LANDING_GAP_MS);
+      }
+      lines.push(...s.fresh());
+      shown.push(
+        ...lines.filter((l) => / shown by SumatraPDF until sharp/.test(l)).map((l) => /page (\d+)/.exec(l)![1]),
+      );
+    } finally {
+      await killAndWait(proc);
+    }
+  }
+  check(
+    "big scans, a page still rendering",
+    "its Rough Page shown by SumatraPDF",
+    shown.length ? `pages ${shown.join(", ")}` : "-",
+    shown.length > 0,
+  );
+}
+
 function printTable(): void {
   for (const r of rows) {
     console.log(`${r.ok ? "ok  " : "FAIL"} ${r.name}\n     expect: ${r.expect}\n     got:    ${r.got}`);
@@ -233,6 +277,7 @@ export async function testit(): Promise<void> {
   rows.length = 0;
   await numberedBook();
   await scan();
+  await landing();
 
   printTable();
   const failed = rows.filter((r) => !r.ok).length;

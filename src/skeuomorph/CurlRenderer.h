@@ -88,7 +88,8 @@ bool CurlInAir(MainWindow* win);
 void CurlCopyOld(MainWindow* win, CurlSpread from);
 void CurlStart(MainWindow* win, const CurlTurn& turn);
 void CurlWindowShowsNew(MainWindow* win, CurlSpread now);
-void CurlRough(MainWindow* win, DisplayModel* dm);
+void CurlRough(MainWindow* win, DisplayModel* dm, const CurlSpread& shown);
+bool CurlRoughPaint(MainWindow* win, HDC hdc, int pageNo, Rect bounds);
 
 // why: a short reason for the debug log, e.g. "resize"; a string literal
 void CurlLandAll(MainWindow* win, const char* why);

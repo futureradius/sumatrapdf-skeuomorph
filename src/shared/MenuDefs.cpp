@@ -354,7 +354,7 @@ MenuDef menuDefView[] = {
     },
     {
         TrN("Skeuomorph Page Turn"),
-        CmdToggleSkeuomorphPageTurn,
+        CmdToggleSkeuomorphPageTurn, // skeuomorph: hook menu
     },
     {
         TrN("Transparency Gri&d"),
