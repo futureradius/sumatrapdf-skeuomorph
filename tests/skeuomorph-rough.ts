@@ -13,7 +13,10 @@
 // 3. A Bundle (End): its outer sheets get Rough Pages of pages in between.
 // 4. A scan from the test shelf, held Page Down: printed, not judged (speed
 //    depends on the PC; the Release speed check is separate).
-// 5. Big scans, opened and tapped through: a page SumatraPDF is still
+// 5. The scan limited to 2 logical processors: rotated, a Rough Page waits while
+//    SumatraPDF renders pages on screen; held Page Down still makes some:
+//      skeuomorph-rough: held back, SumatraPDF renders pages on screen
+// 6. Big scans, opened and tapped through: a page SumatraPDF is still
 //    rendering shows its Rough Page in SumatraPDF's own painting until sharp:
 //      skeuomorph-rough: page 48 shown by SumatraPDF until sharp
 //
@@ -23,10 +26,11 @@
 // Build the debug exe first, then: bun tests/skeuomorph-rough.ts
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
-import { prepareTestEnvironment, runTest, tmpPath } from "./util.ts";
-import { killAndWait, launchControlled } from "./win-automation.ts";
-import { postMessage, sleep, VK_NEXT, WM_KEYDOWN, WM_KEYUP } from "./winapi.ts";
+import { cmdId, prepareTestEnvironment, runTest, tmpPath } from "./util.ts";
+import { killAndWait, launchControlled, sendCommand } from "./win-automation.ts";
+import { postMessage, setProcessAffinity, sleep, VK_NEXT, WM_KEYDOWN, WM_KEYUP } from "./winapi.ts";
 import type { ControlClient } from "./control.ts";
 
 const BOOK = "C:\\code\\test-shelf\\generated\\numbered-800-pages.pdf";
@@ -47,6 +51,10 @@ const LAND_WAIT_MS = 4000;
 const COPY_WAIT_MS = 5000;
 // held Page Down on simple pages: at most this share of face-frames blank
 const MAX_BLANK_SHARE = 0.25;
+// spec 5.6: 2 or fewer logical processors hold Rough Pages back
+const FEW_CPUS = 2;
+const TWO_CPUS_MASK = 0b11;
+const HELD_BACK = /^skeuomorph-rough: held back/;
 
 const SETTINGS = [
   "Theme = Light",
@@ -223,6 +231,48 @@ async function scan(): Promise<void> {
     await s.hold(VK_NEXT, HOLD_MS);
     const lines = await s.collect();
     check("scan, hold Page Down (not judged)", "printed", describe(tally(lines), lines), true);
+    const held = lines.filter((l) => HELD_BACK.test(l)).length;
+    if (availableParallelism() > FEW_CPUS) {
+      check(
+        `scan, ${availableParallelism()} logical processors`,
+        "never held back",
+        `held back ${held} times`,
+        held === 0,
+      );
+    }
+  } finally {
+    await killAndWait(proc);
+  }
+}
+
+// spec 5.6: on 2 logical processors a Rough Page starts only while SumatraPDF
+// renders nothing on screen. The app reads its affinity at every paint
+async function twoCpus(): Promise<void> {
+  if (!existsSync(SCAN)) {
+    return;
+  }
+  const { proc, frame, s } = await open(SCAN, "two-cpus");
+  try {
+    const limited = setProcessAffinity(proc.pid!, TWO_CPUS_MASK);
+    await s.waitFor(/skeuomorph-rough: background copy/, COPY_WAIT_MS);
+    await s.settle();
+    s.fresh();
+
+    // rotated, the Spread on screen renders anew and wants Rough Pages meanwhile
+    sendCommand(frame, cmdId("CmdRotateRight"));
+    await s.settle();
+    const held = s.fresh().filter((l) => HELD_BACK.test(l)).length;
+    check(
+      "2 logical processors, Spread re-rendering",
+      "Rough Pages held back for SumatraPDF",
+      `${limited ? "" : "affinity not set; "}held back ${held} times`,
+      limited && held > 0,
+    );
+
+    await s.hold(VK_NEXT, HOLD_MS);
+    const lines = await s.collect();
+    const done = lines.map(parseRough).filter((r) => r?.what === "done").length;
+    check("2 logical processors, hold Page Down", "Rough Pages made", `${done} Rough Pages`, done > 0);
   } finally {
     await killAndWait(proc);
   }
@@ -277,6 +327,7 @@ export async function testit(): Promise<void> {
   rows.length = 0;
   await numberedBook();
   await scan();
+  await twoCpus();
   await landing();
 
   printTable();

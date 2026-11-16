@@ -29,6 +29,8 @@ constexpr float kRoughScale = 0.5f;
 constexpr float kRoughMaxPx = 600;
 // finished pictures nobody wishes for any more: the newest kept
 constexpr int kShelfMax = 16;
+// spec 5.6: on this many logical processors or fewer, SumatraPDF's renders go first
+constexpr int kFewCpus = 2;
 
 // what the pictures look like: a change throws the finished ones away
 struct Look {
@@ -77,6 +79,7 @@ struct RoughPages {
     // UI thread -> worker: the Spread on screen until SumatraPDF draws it sharp
     RoughWant shown[2];
     int nShown = 0;
+    bool holdBack = false; // few CPUs, and SumatraPDF renders pages on screen
 
     // worker
     int drawing = 0;
@@ -248,6 +251,7 @@ static void Worker(RoughPages* rp) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     EngineBase* copy = nullptr;
     int copyId = 0;
+    bool held = false; // logged once per stretch
     for (;;) {
         rp->mutex.Lock();
         if (rp->quit) {
@@ -262,6 +266,10 @@ static void Worker(RoughPages* rp) {
             rp->src = nullptr;
         }
         RoughWant w = newCopy ? RoughWant() : NextWant(rp);
+        bool holdBack = w.page && rp->holdBack;
+        if (holdBack) {
+            w = RoughWant();
+        }
         Look look = rp->look;
         int gen = rp->gen;
         rp->drawing = w.page;
@@ -283,6 +291,10 @@ static void Worker(RoughPages* rp) {
             }
             continue;
         }
+        if (holdBack && !held) {
+            logf("skeuomorph-rough: held back, SumatraPDF renders pages on screen\n");
+        }
+        held = holdBack;
         if (!w.page || !copy) {
             WaitForSingleObject(rp->wake, INFINITE);
             continue;
@@ -394,8 +406,23 @@ static void StartWorker(RoughPages* rp) {
     SafeCloseThreadHandle(&h);
 }
 
+// the logical processors this process may run on
+static int UsableCpus() {
+    DWORD_PTR mine = 0;
+    DWORD_PTR all = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &mine, &all) || !mine) {
+        return CpuCoreCount();
+    }
+    int n = 0;
+    for (; mine; mine &= mine - 1) {
+        n++;
+    }
+    return n;
+}
+
 // at every paint of a Paged View with the switch on and the layer loaded.
-// EPUB and other reflowed documents lay out pages anew in the copy: none there
+// EPUB and other reflowed documents lay out pages anew in the copy: none there.
+// A render SumatraPDF finishes repaints, so holdBack never stays stale
 void RoughShow(RoughPages* rp, DisplayModel* dm) {
     if (!rp || !dm || dm->GetEngine()->isReflowable) {
         RoughHide(rp);
@@ -415,14 +442,20 @@ void RoughShow(RoughPages* rp, DisplayModel* dm) {
     look.legacyRecolor = EngineUsesDocumentColorsFollowTheme(engine) && !EngineUsesReflowThemeCss(engine);
     BuildViewDarkModeProfile(engine, &look.dark);
 
+    bool holdBack = UsableCpus() <= kFewCpus && gRenderCache->IsBusyFor(dm);
+
     rp->mutex.Lock();
     bool changed = !SameLook(look, rp->look);
     if (changed) {
         NewLook(rp, look);
     }
+    bool released = rp->holdBack && !holdBack;
+    rp->holdBack = holdBack;
     rp->mutex.Unlock();
     if (changed) {
         StartWorker(rp);
+    }
+    if (changed || released) {
         SetEvent(rp->wake);
     }
 }

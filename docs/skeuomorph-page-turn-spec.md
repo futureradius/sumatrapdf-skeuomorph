@@ -409,7 +409,7 @@ ADR [0002](adr/0002-rough-pages-from-a-background-copy.md) covers the choice.
 - **One at a time.** At most 10 faces: oldest Curl first, and within a Curl the face that shows first.
 - **Skip** faces that already have a sharp picture or a Rough Page, and everything inside a Bundle.
 - **Cancel by forgetting:** when a Curl lands or a face leaves the screen, drop it. If it's the one being drawn, abort it and throw the result away. Faces of the Spread landed on stay until SumatraPDF draws them sharp.
-- **On 2 or fewer logical processors:** start one only while `RenderCache::IsBusyFor(dm)` is false.
+- **On 2 or fewer logical processors** (those the process may run on): start one only while `RenderCache::IsBusyFor(dm)` is false. SumatraPDF's painting checks it; a finished render repaints, which lets the next one start.
 
 **Size:** half the page's on-screen size, long side at most ~600 px, same shape. Not adaptive, not a setting.
 
@@ -423,6 +423,7 @@ ADR [0002](adr/0002-rough-pages-from-a-background-copy.md) covers the choice.
 - Unsaved annotation edits may be missing on flipped-past pages; accepted.
 - No brake for heavy files.
 - If the copy can't be made, faces show blank paper.
+- **EPUB and other reflowed documents get none:** the copy lays its pages out anew, so its page numbers needn't match. Their faces show the sharp page or blank paper.
 - Check why some memory isn't returned when the copy closes (seen in testing); don't block on it.
 
 **Background reading**

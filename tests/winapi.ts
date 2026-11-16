@@ -229,6 +229,7 @@ const kernel32 = loadDll("kernel32.dll", {
   Process32NextW: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.bool },
   OpenProcess: { args: [FFIType.u32, FFIType.bool, FFIType.u32], returns: FFIType.u64 },
   TerminateProcess: { args: [FFIType.u64, FFIType.u32], returns: FFIType.bool },
+  SetProcessAffinityMask: { args: [FFIType.u64, FFIType.u64], returns: FFIType.bool },
   WaitForSingleObject: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u32 },
   CloseHandle: { args: [FFIType.u64], returns: FFIType.bool },
   GetLastError: { args: [], returns: FFIType.u32 },
@@ -2309,6 +2310,8 @@ const TH32CS_SNAPPROCESS = 0x2;
 const INVALID_HANDLE_VALUE = 0xffffffffffffffffn;
 const PROCESS_TERMINATE = 0x0001;
 const SYNCHRONIZE = 0x00100000;
+const PROCESS_SET_INFORMATION = 0x0200;
+const PROCESS_QUERY_INFORMATION = 0x0400;
 const WAIT_OBJECT_0 = 0;
 // x64 PROCESSENTRY32W: DWORD fields, then ULONG_PTR, then WCHAR szExeFile[MAX_PATH]
 const PROCESSENTRY32W_SIZE = 568;
@@ -2365,6 +2368,19 @@ export function killPid(pid: number, timeoutMs = 5000): boolean {
   try {
     kernel32.symbols.TerminateProcess(h, 1);
     return kernel32.symbols.WaitForSingleObject(h, timeoutMs) === WAIT_OBJECT_0;
+  } finally {
+    kernel32.symbols.CloseHandle(h);
+  }
+}
+
+// Limits a pid to the logical processors in mask (bit 0 = CPU 0).
+export function setProcessAffinity(pid: number, mask: number): boolean {
+  const h = kernel32.symbols.OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid);
+  if (!h) {
+    return false;
+  }
+  try {
+    return kernel32.symbols.SetProcessAffinityMask(h, BigInt(mask));
   } finally {
     kernel32.symbols.CloseHandle(h);
   }
