@@ -69,6 +69,8 @@ const BOOK3 = `${SHELF}\\numbered-003-pages.pdf`;
 const DURATION_MS = 3000;
 // the change comes this long after Page Down
 const CHANGE_AT_MS = 300;
+// after a relayout the debug build can take ~600 ms to start the Curl
+const START_WAIT_MS = 1500;
 // landed at once: well before the Curl's own end
 const AT_ONCE_MS = 1000;
 // kept playing: about the whole length the turn line gave (fast tapping
@@ -187,12 +189,18 @@ class Session {
   async startCurl(): Promise<{ err: string; lenMs: number }> {
     this.mark();
     this.pageDown();
-    await sleep(CHANGE_AT_MS);
-    const turns = this.newTurns();
-    const curl = turns.find((t) => t.startsWith("Curl"));
+    const t0 = Date.now();
+    const turns: string[] = [];
+    let curl: string | undefined;
+    while (!curl && Date.now() - t0 < START_WAIT_MS) {
+      await sleep(20);
+      turns.push(...this.newTurns());
+      curl = turns.find((t) => t.startsWith("Curl"));
+    }
     if (!curl) {
       return { err: `no Curl started: ${turns.join(" | ") || "(no line)"}`, lenMs: 0 };
     }
+    await sleep(Math.max(0, CHANGE_AT_MS - (Date.now() - t0)));
     const lenMs = +(/, (\d+) ms,/.exec(curl)?.[1] ?? 0);
     const early = this.newFlights();
     if (early.length > 0) {
