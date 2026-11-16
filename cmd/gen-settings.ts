@@ -2440,7 +2440,7 @@ const globalPrefs: Field[] = [
   compactStruct("PropWinPos", pointPos, "position of the document properties window").structName("Point"),
   // saved & honored, but hidden from the advanced settings dialog (edited via
   // the "Automatically check for updates" checkbox in Options instead)
-  field("CheckForUpdates", Bool, true, "if true, check once a day whether an update is available").internal(),
+  field("CheckForUpdates", Bool, false, "if true, check once a day whether an update is available").internal(), // skeuomorph: hook no-update-check
   field(
     "OnlineApiKey",
     Str,

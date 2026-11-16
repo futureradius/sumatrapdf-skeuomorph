@@ -144,6 +144,15 @@ field) and `globalPrefsLayout`. Then run the generator.
   "PageTurnDuration",
 ```
 
+### no-update-check: no automatic update check
+
+Where: `cmd/gen-settings.ts`, the `CheckForUpdates` field. Then run the generator.
+An official update would replace the fork. Help → Check for Updates still works.
+
+```ts cmd/gen-settings.ts
+  field("CheckForUpdates", Bool, false, "if true, check once a day whether an update is available").internal(), // skeuomorph: hook no-update-check
+```
+
 ### command: the switch's command
 
 Where: `cmd/gen-commands.ts`, the very end of `commandsRaw`. Then run the generator.

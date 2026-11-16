@@ -1271,7 +1271,7 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, timeOfLastUpdateCheck), SettingType::Compact, (intptr_t)&gFILETIMEInfo, true},
     {offsetof(Settings, openCountWeek), SettingType::Int, 0, true},
     {offsetof(Settings, propWinPos), SettingType::Compact, (intptr_t)&gPointInfo, true},
-    {offsetof(Settings, checkForUpdates), SettingType::Bool, true, true},
+    {offsetof(Settings, checkForUpdates), SettingType::Bool, false, true},
     {offsetof(Settings, onlineApiKey), SettingType::String, 0, true},
     {offsetof(Settings, onlineServer), SettingType::String, 0, true},
     {(size_t)-1, SettingType::Comment, 0, true},
