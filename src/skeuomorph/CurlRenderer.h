@@ -41,7 +41,9 @@ struct CurlTurn {
     bool back = false; // the Curl clockId is sent back (or on again): no new Curl
     pageturn::TurnKind kind = pageturn::TurnKind::Curl;
     pageturn::Sheets sheets;
-    int firstPage = 0;       // the first page it turns over: orders sheets as in a book
+    int firstPage = 0;          // the first page it turns over: orders sheets as in a book
+    pageturn::Spread fromPages; // page numbers: what lies under the sheets, whose copy shows its landing
+    pageturn::Spread toPages;
     int splitOf = 0;         // a tap the other way turns back leaves of Bundle splitOf: no new Curl
     int peeled = 0;          // its leaves turned back so far
     pageturn::Landed across; // turns in the air whose pages this one crosses: they land at once

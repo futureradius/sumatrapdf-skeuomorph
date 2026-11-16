@@ -165,6 +165,8 @@ struct TurnData {
     TurnKind kind = TurnKind::Curl;
     Sheets sheets;
     int firstPage = 0;
+    Spread fromPages;
+    Spread toPages;
     int splitOf = 0;
     int peeled = 0;
     Landed across;
@@ -870,7 +872,7 @@ struct Flight {
     CurlTimes times;
 };
 
-// the Curls in the air, oldest first; all turn the same way. A glide flies
+// the Curls in the air, oldest first; mostly heading one way. A glide flies
 // alone. Each frame shares one cover hand-off
 struct Stage {
     Vec<Flight*> flights;
@@ -1010,8 +1012,24 @@ static float SheetAlpha(Fade fade, float t) {
     return 1;
 }
 
-// the picture a face shows, or null for blank paper. The next Curl's old
-// Spread holds this one's landing page, as SumatraPDF last showed it
+static bool SamePages(Spread a, Spread b) {
+    return a.first == b.first && a.last == b.last;
+}
+
+// the later Curl that lifted off from where flight i lands: its old Spread
+// holds that landing page, as SumatraPDF last showed it
+static const Flight* LandingCopy(const Stage& st, int i) {
+    const Flight& f = *st.flights[i];
+    for (int j = i + 1; j < len(st.flights); j++) {
+        const Flight* later = st.flights[j];
+        if (SamePages(later->turn.fromPages, f.turn.toPages)) {
+            return later;
+        }
+    }
+    return nullptr;
+}
+
+// the picture a face shows, or null for blank paper. next: LandingCopy
 static const CurlPicture* FacePicture(const Flight& f, const Flight* next, Face face) {
     if (face == Face::Old) {
         return &f.oldPic;
@@ -1567,40 +1585,71 @@ static int EndSideOf(const Flight& f) {
     return toLeft != AllBack(f) ? kLeft : kRight;
 }
 
-// what lies under the sheets, per side: the old screen of the oldest turn
-// landing there; else the newest turn's new page it lifts off. A sheet split
-// off a Bundle goes back the other way, so then both sides have an old screen
+// a turn's page on a side, under its sheets: where they land, the old page
+// there; where they lift off, the new page. 0: neither
+static int PageUnder(const Flight& f, int side, int readSide, bool* lands) {
+    bool toLeft = f.geo.dirX > 0;
+    int startSide = toLeft ? kRight : kLeft;
+    *lands = EndSideOf(f) == side;
+    const Spread& pages = *lands ? f.turn.fromPages : f.turn.toPages;
+    if (!*lands && startSide != side) {
+        return 0;
+    }
+    return side == readSide ? pages.first : pages.last;
+}
+
+// what lies under the sheets: per side the deepest page, as in a book. On the
+// read side that's the lowest page, on the other the highest. So with turns
+// going both ways (Page Down, Down, Up, Up, Up) each side keeps the page that
+// is really beneath, not the newest turn's
 static void DrawBottom(Gpu& g, const Stage& st) {
     const Flight& newest = *VecLast(st.flights);
-    const Flight& oldest = *st.flights[0];
     if (newest.turn.shape == CurlShape::Spread) {
-        const Flight* lands[2] = {};
-        for (const Flight* f : st.flights) {
-            int side = EndSideOf(*f);
-            if (!lands[side]) {
-                lands[side] = f;
-            }
-        }
+        bool r2l = newest.turn.forward == (newest.turn.sweep == Sweep::ToRight);
+        int readSide = r2l ? kRight : kLeft;
+        const Flight* under[2] = {};
+        bool lands[2] = {};
         for (int side = kLeft; side <= kRight; side++) {
-            if (lands[side]) {
-                continue;
-            }
-            for (int i = len(st.flights) - 1; i >= 0; i--) {
-                const Flight& f = *st.flights[i];
-                if (EndSideOf(f) != side) {
-                    DrawRevealed(g, f, f.geo.revealed);
-                    break;
+            int deepest = 0;
+            for (const Flight* f : st.flights) {
+                bool fLands = false;
+                int page = PageUnder(*f, side, readSide, &fLands);
+                if (page == 0) {
+                    continue;
+                }
+                bool deeper = side == readSide ? page < deepest : page > deepest;
+                if (!under[side] || deeper) {
+                    under[side] = f;
+                    lands[side] = fLands;
+                    deepest = page;
                 }
             }
         }
-        for (const Flight* f : lands) {
-            if (f) {
+        for (int side = kLeft; side <= kRight; side++) {
+            if (under[side] && !lands[side]) {
+                DrawRevealed(g, *under[side], under[side]->geo.revealed);
+            }
+        }
+        for (int side = kLeft; side <= kRight; side++) {
+            const Flight* f = under[side];
+            if (f && lands[side]) {
                 DrawFlat(g, f->turn, AllBack(*f) ? f->geo.start : f->geo.stays, f->oldPic);
             }
         }
         return;
     }
-    DrawSingleAround(g, newest.turn.forward ? newest : oldest, Part::Bottom);
+
+    // Single Page: the highest page lies deepest
+    const Flight* bottom = st.flights[0];
+    int deepest = 0;
+    for (const Flight* f : st.flights) {
+        int page = std::max(f->turn.fromPages.first, f->turn.toPages.first);
+        if (page > deepest) {
+            deepest = page;
+            bottom = f;
+        }
+    }
+    DrawSingleAround(g, *bottom, Part::Bottom);
     for (int i = len(st.flights) - 1; i >= 0; i--) {
         DrawSingleAround(g, *st.flights[i], Part::Around);
     }
@@ -1626,8 +1675,8 @@ static const CurlPicture* SplitLanding(const Stage& st) {
 static void DrawSheets(Gpu& g, const Stage& st) {
     int n = len(st.flights);
     const Flight* next[kMaxInAir + 1] = {};
-    for (int i = 0; i + 1 < n && i < kMaxInAir; i++) {
-        next[i] = st.flights[i + 1];
+    for (int i = 0; i < n && i <= kMaxInAir; i++) {
+        next[i] = LandingCopy(st, i);
     }
     const CurlPicture* splitLanding = SplitLanding(st);
     int casters = 0;
@@ -1978,18 +2027,14 @@ static void LandAll(Renderer* r, Gpu& g, Stage& st, LandHow how, const char* why
     PublishGone(r, st);
 }
 
-static bool SameWay(const TurnData& a, const TurnData& b) {
-    return a.shape == b.shape && a.sweep == b.sweep && a.forward == b.forward;
-}
-
-// a turn the next one shares the air with: the same way, or a Bundle whose
-// sheets all go back, the way the next one turns
+// a turn the next one shares the air with: heading the way the next one
+// turns. Sent back, or a Bundle with every sheet turned back, heads the
+// other way (Page Down, Down, Up, Up, Up: the third Up joins two going back)
 static bool FliesWith(const Flight& f, const TurnData& next) {
-    if (SameWay(f.turn, next)) {
-        return true;
-    }
-    bool opposite = f.turn.shape == next.shape && f.turn.sweep != next.sweep && f.turn.forward != next.forward;
-    return opposite && AllBack(f);
+    bool flipped = f.back != AllBack(f);
+    bool sameSweep = (f.turn.sweep == next.sweep) != flipped;
+    bool sameWay = (f.turn.forward == next.forward) != flipped;
+    return f.turn.shape == next.shape && sameSweep && sameWay;
 }
 
 // sent back (or on again) from where it is. Heading back, SumatraPDF shows the
@@ -2066,8 +2111,8 @@ static void Peel(Gpu& g, Stage& st, Flight& f, const TurnData& turn) {
 }
 
 // every tap starts its own Curl or Bundle, from the old Spread copied at the
-// tap. Only turns the same way share the air (and sheets split off a Bundle,
-// going back), a glide flies alone, and past 5 the oldest lands at once. So
+// tap. Only turns heading the same way share the air (sent back counts as
+// heading back), a glide flies alone, and past 5 the oldest lands at once. So
 // does a turn whose pages the new one crosses
 static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     st.pace = turn.pace;
@@ -2102,11 +2147,19 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     // the swap chain follows the canvas; its buffers are undefined until the next Present
     Size size = turn.canvas;
     bool resize = !size.IsEmpty() && !(size == CurlLayerSize(g.layer));
-    if (len(st.flights) > 0) {
-        const Flight& last = *VecLast(st.flights);
-        if (resize || last.glide.on || GlideOf(turn).on || !FliesWith(last, turn)) {
-            LandAll(r, g, st, LandHow::AtOnce, "next Curl");
+    // one heading the other way that already landed (waiting for SumatraPDF's
+    // page) just goes: nothing moves
+    while (len(st.flights) > 0) {
+        int i = len(st.flights) - 1;
+        const Flight& last = *st.flights[i];
+        if (!resize && !last.glide.on && !GlideOf(turn).on && FliesWith(last, turn)) {
+            break;
         }
+        if (!resize && !last.glide.on && AtRest(last)) {
+            Finish(r, g, st, i, LandHow::Done, "");
+            continue;
+        }
+        LandAll(r, g, st, LandHow::AtOnce, "next Curl");
     }
     if (len(st.flights) >= kMaxInAir) {
         Finish(r, g, st, 0, LandHow::AtOnce, "sixth Curl");
@@ -2137,7 +2190,7 @@ static void OnStart(Renderer* r, Gpu& g, Stage& st, const TurnData& turn) {
     f->times.id = turn.id;
     f->times.start = turn.t0;
     // the one before lands on the page this one's copy shows
-    if (len(st.flights) > 0 && f->oldPic.ok) {
+    if (len(st.flights) > 0 && f->oldPic.ok && SamePages(VecLast(st.flights)->turn.toPages, turn.fromPages)) {
         VecLast(st.flights)->landPic = CurlPicture();
     }
     VecAppend(st.flights, f);
@@ -2617,7 +2670,13 @@ void CurlCopyOld(MainWindow* win, CurlSpread from) {
 
 void CurlStart(MainWindow* win, const CurlTurn& turn) {
     Renderer* r = FindRenderer(win);
-    if (!r || !IsLoaded(r) || !r->haveFrom) {
+    if (!r || !IsLoaded(r)) {
+        return;
+    }
+    if (!r->haveFrom) {
+        if (IS_DEBUG) {
+            logf("skeuomorph-curl: no Curl (no copy of the old Spread)\n");
+        }
         return;
     }
     r->haveFrom = false;
@@ -2634,6 +2693,8 @@ void CurlStart(MainWindow* win, const CurlTurn& turn) {
     t.kind = turn.kind;
     t.sheets = turn.sheets;
     t.firstPage = turn.firstPage;
+    t.fromPages = turn.fromPages;
+    t.toPages = turn.toPages;
     t.splitOf = turn.splitOf;
     t.peeled = turn.peeled;
     t.across = turn.across;

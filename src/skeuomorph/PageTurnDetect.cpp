@@ -181,6 +181,8 @@ struct Launch {
     int lenMs = 0;
     Sheets sheets;
     int firstPage = 0;
+    Spread fromPages;
+    Spread toPages;
     int splitOf = 0;
     Landed across;
 };
@@ -194,6 +196,8 @@ static void StartCurl(MainWindow* win, DisplayModel* dm, const Turn& t, const La
     c.kind = t.kind;
     c.sheets = l.sheets;
     c.firstPage = l.firstPage;
+    c.fromPages = l.fromPages;
+    c.toPages = l.toPages;
     c.splitOf = l.splitOf;
     c.peeled = l.splitOf ? clock.Peeled(id) : 0;
     c.across = l.across;
@@ -325,6 +329,8 @@ static void FinishTurn(MainWindow* win) {
     }
     l.lenMs = wt->clock.LengthMs(t.kind, now);
     l.firstPage = TurnedPages(wt->from, to).lo;
+    l.fromPages = wt->from;
+    l.toPages = to;
     LogTurn(t, wt->from, to, l.lenMs, wt->clock.InAir(), landed.n, l.reversed ? l.id : 0, l.splitOf);
 
     wt->roomPx = EdgesRoomOnScreen(dm);
