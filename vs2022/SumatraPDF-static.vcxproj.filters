@@ -735,6 +735,9 @@
     <ClInclude Include="..\src\skeuomorph\PageTurnLogic.h">
       <Filter>src\skeuomorph</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\skeuomorph\RoughPages.h">
+      <Filter>src\skeuomorph</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\skeuomorph\ScreenCopy.h">
       <Filter>src\skeuomorph</Filter>
     </ClInclude>
@@ -1713,6 +1716,9 @@
       <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\skeuomorph\PageTurnLogic_ut.cpp">
+      <Filter>src\skeuomorph</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\skeuomorph\RoughPages.cpp">
       <Filter>src\skeuomorph</Filter>
     </ClCompile>
     <ClCompile Include="..\src\skeuomorph\ScreenCopy.cpp">

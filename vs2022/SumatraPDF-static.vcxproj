@@ -1602,6 +1602,7 @@
     <ClInclude Include="..\src\skeuomorph\PageTurnDetect.h" />
     <ClInclude Include="..\src\skeuomorph\PageTurnHooks.h" />
     <ClInclude Include="..\src\skeuomorph\PageTurnLogic.h" />
+    <ClInclude Include="..\src\skeuomorph\RoughPages.h" />
     <ClInclude Include="..\src\skeuomorph\ScreenCopy.h" />
     <ClInclude Include="..\src\skeuomorph\WindowChanges.h" />
     <ClInclude Include="..\src\uia\DocumentProvider.h" />
@@ -2480,6 +2481,7 @@
     <ClCompile Include="..\src\skeuomorph\PageTurnHooks.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageTurnLogic.cpp" />
     <ClCompile Include="..\src\skeuomorph\PageTurnLogic_ut.cpp" />
+    <ClCompile Include="..\src\skeuomorph\RoughPages.cpp" />
     <ClCompile Include="..\src\skeuomorph\ScreenCopy.cpp" />
     <ClCompile Include="..\src\skeuomorph\WindowChanges.cpp" />
     <ClCompile Include="..\src\tests\Sumatra_ut.cpp">

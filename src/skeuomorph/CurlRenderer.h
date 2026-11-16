@@ -18,6 +18,7 @@
 // If the layer can't load, CurlIsLoaded stays false and Page Turns are
 // instant jumps. Include PageTurnLogic.h first.
 struct MainWindow;
+struct DisplayModel;
 
 // a Spread as on screen, canvas pixels. Single Page uses left only; a lone
 // page in Facing or Book View sits on its side of the spine; a wide page
@@ -29,6 +30,8 @@ struct CurlSpread {
     float spineX = 0;  // Facing and Book View: the spine, canvas px
     int edgesLeft = 0; // Page Edges thickness beside the left page, screen px
     int edgesRight = 0;
+    int pages[2] = {};  // page number on the left and right; 0: none
+    bool sharp[2] = {}; // SumatraPDF had it drawn sharp when the screen was copied
 };
 
 enum class CurlShape {
@@ -85,6 +88,7 @@ bool CurlInAir(MainWindow* win);
 void CurlCopyOld(MainWindow* win, CurlSpread from);
 void CurlStart(MainWindow* win, const CurlTurn& turn);
 void CurlWindowShowsNew(MainWindow* win, CurlSpread now);
+void CurlRough(MainWindow* win, DisplayModel* dm);
 
 // why: a short reason for the debug log, e.g. "resize"; a string literal
 void CurlLandAll(MainWindow* win, const char* why);

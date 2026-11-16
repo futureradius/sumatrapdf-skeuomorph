@@ -13,6 +13,8 @@
 #include "EngineBase.h"
 #include "DisplayModel.h"
 #include "Theme.h"
+#include "RenderCache.h"
+#include "SumatraPDF.h"
 #include "MainWindow.h"
 
 #include "skeuomorph/PageTurnLogic.h"
@@ -123,6 +125,17 @@ static bool IsWideAlone(DisplayModel* dm, int pageNo) {
     return pageNo <= len(dm->spreadFlags) && dm->spreadFlags[pageNo - 1] != 0;
 }
 
+enum {
+    kSideLeft = 0,
+    kSideRight = 1
+};
+
+// a page SumatraPDF has drawn at this zoom shows sharp in a screen copy
+static void SetSidePage(DisplayModel* dm, CurlSpread& s, int side, int pageNo) {
+    s.pages[side] = pageNo;
+    s.sharp[side] = gRenderCache->Exists(dm, pageNo, dm->PageRotation(pageNo), dm->GetZoomReal(pageNo));
+}
+
 // the Spread's pages as on screen, canvas px; a lone page in Facing or Book
 // View goes to its side of the spine
 static CurlSpread SpreadOnScreen(DisplayModel* dm) {
@@ -131,23 +144,24 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
         return s;
     }
     Rect shown[2];
-    int shownNo = 0;
+    int shownNo[2] = {};
     int n = 0;
     for (int p = 1; p <= dm->PageCount() && n < 2; p++) {
         PageInfo* pi = dm->GetPageInfo(p);
         if (!pi || !pi->isShown || pi->visibleRatio <= 0 || pi->pageOnScreen.IsEmpty()) {
             continue;
         }
-        shownNo = p;
+        shownNo[n] = p;
         shown[n++] = pi->pageOnScreen;
     }
     if (n == 0) {
         return s;
     }
-    s.zoom = dm->GetZoomReal(shownNo);
+    s.zoom = dm->GetZoomReal(shownNo[n - 1]);
     EdgesOnScreen(dm, &s.edgesLeft, &s.edgesRight);
     if (IsSingle(dm->GetDisplayMode())) {
         s.left = shown[0];
+        SetSidePage(dm, s, kSideLeft, shownNo[0]);
         return s;
     }
     if (n == 2) {
@@ -155,20 +169,25 @@ static CurlSpread SpreadOnScreen(DisplayModel* dm) {
         s.left = inOrder ? shown[0] : shown[1];
         s.right = inOrder ? shown[1] : shown[0];
         s.spineX = (s.left.Right() + s.right.x) / 2.0f;
+        SetSidePage(dm, s, kSideLeft, shownNo[inOrder ? 0 : 1]);
+        SetSidePage(dm, s, kSideRight, shownNo[inOrder ? 1 : 0]);
         return s;
     }
     // a picture printed across the spine: Curls fold it there, half per side
     Rect r = shown[0];
-    if (IsWideAlone(dm, shownNo)) {
+    if (IsWideAlone(dm, shownNo[0])) {
         int half = r.dx / 2;
         s.left = Rect(r.x, r.y, half, r.dy);
         s.right = Rect(r.x + half, r.y, r.dx - half, r.dy);
         s.spineX = (float)s.right.x;
+        SetSidePage(dm, s, kSideLeft, shownNo[0]);
+        SetSidePage(dm, s, kSideRight, shownNo[0]);
         return s;
     }
     // a lone page: the spine is where a facing page would leave it
     bool rightOfSpine = r.x + r.dx / 2 >= dm->GetViewPort().dx / 2;
     (rightOfSpine ? s.right : s.left) = r;
+    SetSidePage(dm, s, rightOfSpine ? kSideRight : kSideLeft, shownNo[0]);
     float halfGap = dm->pageSpacing.dx / 2.0f;
     s.spineX = rightOfSpine ? r.x - halfGap : r.Right() + halfGap;
     return s;
@@ -381,10 +400,13 @@ void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
 void DetectAfterPaint(MainWindow* win, bool flushed) {
     DisplayModel* dm = win->AsFixed();
     // the Curl layer is set up at the first Paged View paint with the switch on
-    if (dm && gSettings->skeuomorphPageTurn && !IsContinuous(dm->GetDisplayMode())) {
+    bool paged = dm && gSettings->skeuomorphPageTurn && !IsContinuous(dm->GetDisplayMode());
+    if (paged) {
         CurlEnsure(win);
         FlashWatch(win);
     }
+    // Rough Pages: a background copy of the document while it shows here
+    CurlRough(win, paged ? dm : nullptr);
     if (!flushed) {
         return;
     }

@@ -651,6 +651,39 @@ static void TurnedPagesTest() {
     utassert(!Overlaps(none, {0, 9}) && !Overlaps({0, 9}, none));
 }
 
+static bool SameFaces(SheetFaces f, int start, int end) {
+    return f.start == start && f.end == end;
+}
+
+static void SheetFacesTest() {
+    Sheets s;
+    s.n = 3;
+    s.leaves = 3;
+    // Facing forward and backward: the last sheet lands the new page
+    utassert(SameFaces(BundleSheetFaces(s, 0, {2, 3}, {8, 9}, Layout::Facing), 3, 4));
+    utassert(SameFaces(BundleSheetFaces(s, 1, {2, 3}, {8, 9}, Layout::Facing), 5, 6));
+    utassert(SameFaces(BundleSheetFaces(s, 2, {2, 3}, {8, 9}, Layout::Facing), 7, 8));
+    utassert(SameFaces(BundleSheetFaces(s, 0, {8, 9}, {2, 3}, Layout::Facing), 8, 7));
+    utassert(SameFaces(BundleSheetFaces(s, 2, {8, 9}, {2, 3}, Layout::Facing), 4, 3));
+    // more leaves than sheets: spread evenly
+    s.n = 2;
+    s.leaves = 20;
+    utassert(SameFaces(BundleSheetFaces(s, 0, {1, 1}, {40, 41}, Layout::Book), 1, 2));
+    utassert(SameFaces(BundleSheetFaces(s, 1, {1, 1}, {40, 41}, Layout::Book), 39, 40));
+    // Single Page: the back is blank paper; backward, the front
+    s.n = 3;
+    s.leaves = 4;
+    utassert(SameFaces(BundleSheetFaces(s, 0, {1, 1}, {5, 5}, Layout::Single), 1, 0));
+    utassert(SameFaces(BundleSheetFaces(s, 2, {1, 1}, {5, 5}, Layout::Single), 4, 0));
+    utassert(SameFaces(BundleSheetFaces(s, 0, {5, 5}, {1, 1}, Layout::Single), 0, 4));
+    utassert(SameFaces(BundleSheetFaces(s, 2, {5, 5}, {1, 1}, Layout::Single), 0, 1));
+    // never a page outside the turn
+    s.n = 2;
+    s.leaves = 1;
+    utassert(SameFaces(BundleSheetFaces(s, 1, {10, 10}, {9, 9}, Layout::Book), 10, 9));
+    utassert(SameFaces(BundleSheetFaces(s, 0, {}, {}, Layout::Facing), 0, 0));
+}
+
 static void AcrossTest() {
     Spread a{1, 1};
     Spread b{2, 3};
@@ -747,6 +780,7 @@ void PageTurnLogic_UnitTests() {
     BundleSheetsTest();
     BundleEdgesTest();
     TurnedPagesTest();
+    SheetFacesTest();
     AcrossTest();
     SplitTest();
     RenumberedTest();

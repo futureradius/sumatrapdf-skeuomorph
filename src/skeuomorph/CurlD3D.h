@@ -23,4 +23,5 @@ struct CurlPicture {
     ComPtr<ID3D11ShaderResourceView> srv;
     Rect area;
     bool ok = false;
+    bool rough = false; // a Rough Page stretched over area, not a screen copy
 };

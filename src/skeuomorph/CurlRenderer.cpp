@@ -5,6 +5,7 @@
 #include "base/Win.h"
 #include "base/Timer.h"
 #include "base/File.h"
+#include "base/Pixmap.h"
 
 #include "gui/UIModels.h"
 
@@ -21,6 +22,7 @@
 #include "skeuomorph/ScreenCopy.h"
 #include "skeuomorph/FlashRecorder.h"
 #include "skeuomorph/PageEdges.h"
+#include "skeuomorph/RoughPages.h"
 #include "skeuomorph/CurlRenderer.h"
 #include "skeuomorph/CurlShaders.h"
 
@@ -216,6 +218,7 @@ struct Renderer {
     HANDLE covered = nullptr;
     HANDLE gone = nullptr;
     ScreenCopyDesk* desk = nullptr;
+    RoughPages* rough = nullptr;
 
     // shared, under mutex
     Mutex mutex;
@@ -273,6 +276,58 @@ static void Post(Renderer* r, const Cmd& c) {
 
 //--- drawing thread: Direct3D
 
+// Rough Pages on the GPU: the newest ones kept, by page
+constexpr int kRoughKept = 16;
+// a frame's Rough Pages placed over their faces, and its wishes
+constexpr int kRoughPlaced = 64;
+constexpr int kRoughWishMax = 64;
+// uploading one takes about 1 ms: at most this many per frame
+constexpr int kRoughUploads = 2;
+// a Bundle's outer sheets on each side show Rough Pages; the hidden middle
+// ones stay blank paper (spec 3.5)
+constexpr int kRoughSheets = 2;
+
+// what a face shows, counted per Curl for the debug log
+enum Shown {
+    kShownSharp = 0,
+    kShownRough,
+    kShownBlank,
+    kShownCount
+};
+
+// the faces of a Curl, in the order the worker draws their Rough Pages
+enum RoughFace {
+    kFaceOld = 0,
+    kFaceLanding,
+    kFaceRevealed,
+    kFaceStays,
+    kFaceSheets, // a Bundle's sheets: 2 faces each
+    kFacesPerCurl = kFaceSheets + 2 * kMaxSheets
+};
+
+struct RoughTex {
+    int page = 0;
+    CurlPicture pic;
+    double usedAt = 0;
+};
+
+struct RoughWishAt {
+    RoughWant want;
+    int order = 0;
+};
+
+struct Roughs {
+    RoughPages* pages = nullptr; // the window's worker
+    int gen = 0;
+    RoughTex kept[kRoughKept];
+    CurlPicture placed[kRoughPlaced];
+    int nPlaced = 0;
+    RoughWishAt wishes[kRoughWishMax];
+    int nWishes = 0;
+    RoughWant asked[kMaxRoughWishes];
+    int nAsked = 0;
+};
+
 struct Gpu {
     ComPtr<ID3D11Device> dev;
     ComPtr<ID3D11DeviceContext> ctx;
@@ -296,6 +351,7 @@ struct Gpu {
     ComPtr<ID3D11Texture2D> edgeTex; // Page Edges' column colours: row 0 left, 1 right
     ComPtr<ID3D11ShaderResourceView> edgeSrv;
     CurlPicture inbox[kSlotCount];
+    Roughs rough;
 };
 
 // d3d11.dll is loaded by hand, nothing is linked
@@ -870,6 +926,7 @@ struct Flight {
     double lastPresent = 0;
     double refreshMs = 1000.0 / 60;
     CurlTimes times;
+    mutable int shown[kShownCount] = {};
 };
 
 // the Curls in the air, oldest first; mostly heading one way. A glide flies
@@ -1054,6 +1111,192 @@ static const CurlPicture* NewPicture(const Flight& f) {
     return f.toPic.ok ? &f.toPic : nullptr;
 }
 
+//--- Rough Pages (spec 3.10): a face shows the sharp page, else its Rough
+// Page, else blank paper. A frame's faces with neither are its wishes: the
+// worker draws them oldest Curl first
+
+static RoughTex* FindKept(Roughs& rs, int page) {
+    for (RoughTex& k : rs.kept) {
+        if (k.page == page) {
+            return &k;
+        }
+    }
+    return nullptr;
+}
+
+// an empty slot, else the one used longest ago
+static RoughTex* FreeKept(Roughs& rs) {
+    RoughTex* slot = &rs.kept[0];
+    for (RoughTex& k : rs.kept) {
+        if (k.page == 0) {
+            return &k;
+        }
+        if (k.usedAt < slot->usedAt) {
+            slot = &k;
+        }
+    }
+    return slot;
+}
+
+static bool Upload(Gpu& g, Pixmap* bmp, CurlPicture* pic) {
+    *pic = CurlPicture();
+    D3D11_TEXTURE2D_DESC d{};
+    d.Width = (UINT)bmp->width;
+    d.Height = (UINT)bmp->height;
+    d.MipLevels = 1;
+    d.ArraySize = 1;
+    d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.Usage = D3D11_USAGE_IMMUTABLE;
+    d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA init{bmp->data, (UINT)bmp->stride, 0};
+    if (FAILED(g.dev->CreateTexture2D(&d, &init, &pic->tex))) {
+        return false;
+    }
+    if (FAILED(g.dev->CreateShaderResourceView(pic->tex.Get(), nullptr, &pic->srv))) {
+        pic->tex.Reset();
+        return false;
+    }
+    pic->ok = true;
+    pic->rough = true;
+    return true;
+}
+
+// before a frame: Rough Pages the worker finished go to the GPU
+static void RoughFrameStart(Gpu& g, double now) {
+    Roughs& rs = g.rough;
+    rs.nPlaced = 0;
+    rs.nWishes = 0;
+    if (!rs.pages) {
+        return;
+    }
+    int gen = RoughGeneration(rs.pages);
+    if (gen != rs.gen) {
+        rs.gen = gen;
+        for (RoughTex& k : rs.kept) {
+            k = RoughTex();
+        }
+    }
+    int uploads = 0;
+    for (int i = 0; i < rs.nAsked && uploads < kRoughUploads; i++) {
+        int page = rs.asked[i].page;
+        if (FindKept(rs, page)) {
+            continue;
+        }
+        Pixmap* bmp = RoughTake(rs.pages, page);
+        if (!bmp) {
+            continue;
+        }
+        uploads++;
+        RoughTex* slot = FreeKept(rs);
+        *slot = RoughTex();
+        if (Upload(g, bmp, &slot->pic)) {
+            slot->page = page;
+            slot->usedAt = now;
+        }
+        FreePixmap(bmp);
+    }
+}
+
+// after a frame: its wishes, oldest Curl first, go to the worker
+static void RoughFrameEnd(Gpu& g) {
+    Roughs& rs = g.rough;
+    if (!rs.pages) {
+        return;
+    }
+    auto byOrder = [](const RoughWishAt& a, const RoughWishAt& b) { return a.order < b.order; };
+    std::sort(rs.wishes, rs.wishes + rs.nWishes, byOrder);
+    int n = 0;
+    for (int i = 0; i < rs.nWishes && n < kMaxRoughWishes; i++) {
+        bool dup = false;
+        for (int j = 0; j < n && !dup; j++) {
+            dup = rs.asked[j].page == rs.wishes[i].want.page;
+        }
+        if (!dup) {
+            rs.asked[n++] = rs.wishes[i].want;
+        }
+    }
+    rs.nAsked = n;
+    RoughWish(rs.pages, rs.asked, n);
+}
+
+// nothing in the air: the worker stops
+static void RoughStop(Gpu& g) {
+    Roughs& rs = g.rough;
+    if (rs.pages && rs.nAsked > 0) {
+        rs.nAsked = 0;
+        RoughWish(rs.pages, nullptr, 0);
+    }
+}
+
+// page's Rough Page over area, canvas px; none yet: it's wished for
+static const CurlPicture* RoughOf(Gpu& g, const Flight& f, int face, int page, Rect area, float zoom) {
+    Roughs& rs = g.rough;
+    if (!rs.pages || page <= 0 || area.IsEmpty() || zoom <= 0) {
+        return nullptr;
+    }
+    RoughTex* kept = FindKept(rs, page);
+    if (kept && rs.nPlaced < kRoughPlaced) {
+        kept->usedAt = CurlNowMs();
+        CurlPicture& pic = rs.placed[rs.nPlaced++];
+        pic = kept->pic;
+        pic.area = area;
+        return &pic;
+    }
+    if (!kept && rs.nWishes < kRoughWishMax) {
+        RoughWishAt& w = rs.wishes[rs.nWishes++];
+        w.want.page = page;
+        w.want.zoom = zoom;
+        w.order = f.turn.id * kFacesPerCurl + face;
+    }
+    return nullptr;
+}
+
+// the screen copy where SumatraPDF had the page sharp, else its Rough Page,
+// else the copy as it was, else null: blank paper
+static const CurlPicture* BestPicture(Gpu& g, const Flight& f, int face, const CurlPicture* copy, bool sharp, int page,
+                                      Rect area, float zoom) {
+    if (copy && !copy->ok) {
+        copy = nullptr;
+    }
+    if (copy && sharp) {
+        f.shown[kShownSharp]++;
+        return copy;
+    }
+    const CurlPicture* rough = RoughOf(g, f, face, page, area, zoom);
+    if (rough) {
+        f.shown[kShownRough]++;
+        return rough;
+    }
+    f.shown[kShownBlank]++;
+    return copy;
+}
+
+// where the page on side lies: a wide page alone spans both
+static Rect PageArea(const CurlSpread& s, int side) {
+    if (s.pages[kLeft] != 0 && s.pages[kLeft] == s.pages[kRight]) {
+        return UnionOf(s.left, s.right);
+    }
+    return side == kLeft ? s.left : s.right;
+}
+
+// the side a Curl's sheet lifts from, and the one it lands on
+static int LiftSide(const Flight& f) {
+    if (f.turn.shape == CurlShape::Single) {
+        return kLeft;
+    }
+    return f.geo.dirX > 0 ? kRight : kLeft;
+}
+
+static int LandSide(const Flight& f) {
+    if (f.turn.shape == CurlShape::Single) {
+        return kLeft;
+    }
+    return f.geo.dirX > 0 ? kLeft : kRight;
+}
+
+static Rect Rounded(RectF r);
+
 // several Curls in the air: each sheet is drawn in two halves, one per side
 // of the spine; empty clip: no clip
 static void SetClip(Gpu& g, Rect clip) {
@@ -1220,6 +1463,29 @@ static SheetPlace SheetOfStack(const SheetPlace& place, const Flight& f, int k) 
     return sp;
 }
 
+// a Bundle's outer sheets show Rough Pages of the pages they stand for
+static void RoughSheet(Gpu& g, const Flight& f, SheetPlace& sp, int k) {
+    int n = f.sheets.n;
+    if (n <= 1 || f.back || f.peeled || (k >= kRoughSheets && k < n - kRoughSheets)) {
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        if (GoesBack(f, i)) {
+            return;
+        }
+    }
+    const TurnData& t = f.turn;
+    Layout layout = t.shape == CurlShape::Single ? Layout::Single : Layout::Facing;
+    SheetFaces pages = BundleSheetFaces(f.sheets, k, t.fromPages, t.toPages, layout);
+    int face = kFaceSheets + 2 * k;
+    if (!sp.front && f.geo.startFace != Face::Paper) {
+        sp.front = RoughOf(g, f, face, pages.start, Rounded(sp.frontSrc), t.from.zoom);
+    }
+    if (!sp.back && f.geo.endFace != Face::Paper) {
+        sp.back = RoughOf(g, f, face + 1, pages.end, Rounded(sp.backSrc), t.to.zoom);
+    }
+}
+
 static RectF MirrorF(RectF r, float spineX) {
     return RectF(2 * spineX - (r.x + r.dx), r.y, r.dx, r.dy);
 }
@@ -1240,6 +1506,7 @@ static void DrawStack(Gpu& g, const Flight& f, const SheetPlace& place, Rect cli
     }
     auto sheetAt = [&](int k) {
         SheetPlace sp = SheetOfStack(place, f, k);
+        RoughSheet(g, f, sp, k);
         if (stepped) {
             sp.start = LerpRectF(place.start, MirrorF(place.end, place.spineX), (float)k / n);
             sp.end = LerpRectF(MirrorF(place.start, place.spineX), place.end, (float)(k + 1) / n);
@@ -1270,8 +1537,19 @@ static void DrawSheet(Gpu& g, const Flight& f, const Flight* next, const CurlPic
     sp.spineX = geo.spineX;
     sp.dirX = geo.dirX;
     sp.fade = geo.fade;
+    const TurnData& t = f.turn;
+    int lift = LiftSide(f);
+    int land = LandSide(f);
     sp.front = FacePicture(f, next, geo.startFace);
+    if (geo.startFace == Face::Old) {
+        sp.front = BestPicture(g, f, kFaceOld, sp.front, t.from.sharp[lift], t.from.pages[lift], PageArea(t.from, lift),
+                               t.from.zoom);
+    }
     sp.back = FacePicture(f, next, geo.endFace);
+    if (geo.endFace == Face::Landing) {
+        bool sharp = next && next->oldPic.ok ? next->turn.from.sharp[land] : t.to.sharp[land];
+        sp.back = BestPicture(g, f, kFaceLanding, sp.back, sharp, t.to.pages[land], PageArea(t.to, land), t.to.zoom);
+    }
     sp.turnedPic = turnedPic;
     sp.frontSrc = sp.start;
     sp.backSrc = sp.end;
@@ -1322,6 +1600,9 @@ enum class Part {
     Around
 };
 
+static void DrawImage(Gpu& g, const TurnData& t, RectF dst, const CurlPicture* pic, RectF src, float alpha,
+                      RectF keep = RectF());
+
 // the newest Curl's new page where the sheet lifted off: blank paper until
 // SumatraPDF shows it, then see-through. Sent back, SumatraPDF shows the old
 // Spread there: the new one comes from its copy
@@ -1334,6 +1615,30 @@ static void DrawRevealed(Gpu& g, const Flight& f, Rect r) {
         return;
     }
     DrawPaper(g, f.turn, r);
+    const CurlSpread& to = f.turn.to;
+    int side = LiftSide(f);
+    if (to.sharp[side]) {
+        return;
+    }
+    const CurlPicture* rough = RoughOf(g, f, kFaceRevealed, to.pages[side], PageArea(to, side), to.zoom);
+    if (rough) {
+        DrawImage(g, f.turn, ToRectF(r), rough, ToRectF(r), 1);
+    }
+}
+
+// the old page where the sheet lands, if SumatraPDF hadn't drawn it sharp
+static void DrawStaysRough(Gpu& g, const Flight& f) {
+    const CurlSpread& from = f.turn.from;
+    int side = LandSide(f);
+    if (from.sharp[side]) {
+        return;
+    }
+    Rect page = PageArea(from, side);
+    const CurlPicture* rough = RoughOf(g, f, kFaceStays, from.pages[side], page, from.zoom);
+    Rect dst = page.Intersect(f.geo.stays);
+    if (rough && !dst.IsEmpty()) {
+        DrawImage(g, f.turn, ToRectF(dst), rough, ToRectF(dst), 1);
+    }
 }
 
 static void DrawSingleAround(Gpu& g, const Flight& f, Part part) {
@@ -1379,7 +1684,7 @@ static void DrawSingleAround(Gpu& g, const Flight& f, Part part) {
 // pic's src stretched over dst, smooth; see-through by 1 - alpha outside keep.
 // No picture: blank paper. dst == src: pixel-exact
 static void DrawImage(Gpu& g, const TurnData& t, RectF dst, const CurlPicture* pic, RectF src, float alpha,
-                      RectF keep = RectF()) {
+                      RectF keep) {
     if (IsEmptyF(dst) || alpha <= 0) {
         return;
     }
@@ -1560,11 +1865,18 @@ static void RenderRest(Gpu& g, const Flight& f) {
     if (geo.landing.IsEmpty()) {
         return;
     }
+    // a copy, so the last frame matches SumatraPDF's; a Rough Page only without one
     const CurlPicture* land = FacePicture(f, nullptr, Face::Landing);
     if (land) {
         DrawFlat(g, f.turn, geo.landing, *land);
-    } else {
-        DrawPaper(g, f.turn, geo.landing);
+        return;
+    }
+    DrawPaper(g, f.turn, geo.landing);
+    int side = LandSide(f);
+    const CurlSpread& to = f.turn.to;
+    const CurlPicture* rough = RoughOf(g, f, kFaceLanding, to.pages[side], PageArea(to, side), to.zoom);
+    if (rough) {
+        DrawImage(g, f.turn, ToRectF(geo.landing), rough, ToRectF(geo.landing), 1);
     }
 }
 
@@ -1634,6 +1946,9 @@ static void DrawBottom(Gpu& g, const Stage& st) {
             const Flight* f = under[side];
             if (f && lands[side]) {
                 DrawFlat(g, f->turn, AllBack(*f) ? f->geo.start : f->geo.stays, f->oldPic);
+                if (!AllBack(*f)) {
+                    DrawStaysRough(g, *f);
+                }
             }
         }
         return;
@@ -1950,6 +2265,9 @@ static void LogFlight(Renderer* r, const Flight& f, LandHow how, const char* why
     }
     if (IS_DEBUG) {
         logf("%s", line);
+        // face-frames: a sharp copy, a Rough Page, blank (paper or an unsharp copy)
+        logf("skeuomorph-faces: #%d sharp %d rough %d blank %d\n", tm.id, f.shown[kShownSharp], f.shown[kShownRough],
+             f.shown[kShownBlank]);
     }
     if (len(perfPath) > 0) {
         AppendPerfLog(perfPath, line);
@@ -2024,6 +2342,7 @@ static void LandAll(Renderer* r, Gpu& g, Stage& st, LandHow how, const char* why
     }
     st.nSpares = 0;
     st.lastPresent = 0;
+    RoughStop(g);
     PublishGone(r, st);
 }
 
@@ -2352,7 +2671,9 @@ static bool DrawFrame(Renderer* r, Gpu& g, Stage& st) {
     }
     PublishGone(r, st);
 
+    RoughFrameStart(g, now);
     RenderFrame(g, st, Scene::Curl);
+    RoughFrameEnd(g);
     if (!CurlLayerPresent(g.layer)) {
         LandAll(r, g, st, LandHow::AtOnce, "Present failed");
         return false;
@@ -2505,6 +2826,7 @@ static void DrawLoop(Renderer* r, Gpu& g) {
 static void DrawThread(Renderer* r) {
     HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     Gpu* g = new Gpu();
+    g->rough.pages = r->rough;
     const char* why = nullptr;
     bool warp = false;
     TimeStamp t = TimeGet();
@@ -2573,6 +2895,7 @@ static void StopRenderer(Renderer* r) {
         SafeCloseThreadHandle(&r->thread);
     }
     DeleteScreenCopyDesk(r->desk);
+    ReleaseRoughPages(r->rough);
     CloseHandle(r->wake);
     CloseHandle(r->covered);
     CloseHandle(r->gone);
@@ -2631,6 +2954,7 @@ void CurlEnsure(MainWindow* win) {
     r->covered = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     r->gone = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     r->desk = NewScreenCopyDesk(r->wake);
+    r->rough = NewRoughPages();
     VecAppend(gRenderers, r);
 
     r->thread = StartThread(MkFunc0<Renderer>(DrawThread, r), StrL("CurlDrawing"));
@@ -2771,6 +3095,21 @@ void CurlWindowShowsNew(MainWindow* win, CurlSpread now) {
     c.now = now;
     c.haveLanding = !landing.IsEmpty() && ScreenCopyAsk(r->desk, win, landing, kSlotLanding);
     Post(r, c);
+}
+
+// at every paint: a background copy of the document for Rough Pages while it
+// shows in a Paged View with the switch on and the layer loaded; dm null: the
+// copy closes
+void CurlRough(MainWindow* win, DisplayModel* dm) {
+    Renderer* r = FindRenderer(win);
+    if (!r) {
+        return;
+    }
+    if (dm && IsLoaded(r)) {
+        RoughShow(r->rough, dm);
+    } else {
+        RoughHide(r->rough);
+    }
 }
 
 // lands everything at once: the layer disappears now

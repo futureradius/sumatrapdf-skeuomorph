@@ -399,6 +399,41 @@ PageRange TurnedPages(Spread from, Spread to) {
     return r;
 }
 
+// sheet fromTop of a Bundle stands for one of the leaves turned, spread
+// evenly from the first to the last. Forward, a leaf shows its front page
+// where the turn starts and the next page where it ends; backward the other
+// way round. Single Page: one page per leaf, its back blank paper.
+// Facing {2,3} -> {8,9}, 3 sheets: 3|4, 5|6, 7|8
+SheetFaces BundleSheetFaces(const Sheets& s, int fromTop, Spread from, Spread to, Layout layout) {
+    SheetFaces faces;
+    if (from.first <= 0 || to.first <= 0 || from.first == to.first) {
+        return faces;
+    }
+    bool forward = to.first > from.first;
+    int leaf = 0;
+    if (s.n > 1) {
+        leaf = (int)lroundf((float)fromTop * (s.leaves - 1) / (s.n - 1));
+    }
+    if (layout == Layout::Single) {
+        if (forward) {
+            faces.start = from.first + leaf;
+        } else {
+            faces.end = from.first - 1 - leaf;
+        }
+    } else {
+        int lead = forward ? from.last : from.first;
+        int step = forward ? 1 : -1;
+        faces.start = lead + 2 * step * leaf;
+        faces.end = faces.start + step;
+    }
+    int lo = std::min(from.first, to.first);
+    int hi = std::max(from.last, to.last);
+    auto valid = [&](int page) { return page >= lo && page <= hi ? page : 0; };
+    faces.start = valid(faces.start);
+    faces.end = valid(faces.end);
+    return faces;
+}
+
 bool Overlaps(PageRange a, PageRange b) {
     if (a.lo > a.hi || b.lo > b.hi) {
         return false;

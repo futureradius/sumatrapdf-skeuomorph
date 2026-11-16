@@ -187,6 +187,14 @@ float EdgesArrive(float t);
 float EdgesOffTarget(int fromPx, int toPx, float done, bool back);
 int SheetsBack(const Sheets& s, int peeled);
 PageRange TurnedPages(Spread from, Spread to);
+
+// the pages on a Bundle sheet's two faces, where the turn starts and where it
+// ends; 0: blank paper
+struct SheetFaces {
+    int start = 0;
+    int end = 0;
+};
+SheetFaces BundleSheetFaces(const Sheets& s, int fromTop, Spread from, Spread to, Layout layout);
 bool Overlaps(PageRange a, PageRange b);
 
 // ids of turns that land, oldest first
