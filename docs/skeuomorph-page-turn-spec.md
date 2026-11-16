@@ -424,7 +424,7 @@ ADR [0002](adr/0002-rough-pages-from-a-background-copy.md) covers the choice.
 - No brake for heavy files.
 - If the copy can't be made, faces show blank paper.
 - **EPUB and other reflowed documents get none:** the copy lays its pages out anew, so its page numbers needn't match. Their faces show the sharp page or blank paper.
-- Check why some memory isn't returned when the copy closes (seen in testing); don't block on it.
+- Memory when the copy closes (checked 2026-11-16, `tests/ad-hoc-skeuomorph-memory.ts`): the copy's memory comes back. About 1.8 MB stays per open-flip-close cycle on a scan (0.3 MB on the numbered book), cause unknown; not pursued.
 
 **Background reading**
 
