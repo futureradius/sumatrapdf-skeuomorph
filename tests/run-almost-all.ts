@@ -581,6 +581,7 @@ export const tests: NamedTest[] = [
   // first: it drives the home page, whose thumbnail selection follows the
   // mouse, so it is the one test that cares what the machine was doing before
   ["issue-5978", issue5978],
+  ["pdf-only-menu-items", pdfOnlyMenuItems],
   ["session-restore-search", sessionRestoreSearch],
   ["issue-6412", issue6412],
   ["sidebar-thumbnails", sidebarThumbnails],
@@ -856,7 +857,6 @@ export const tests: NamedTest[] = [
   ["epub-metadata-properties", epubMetadataProperties],
   ["issue-5950", issue5950],
   ["issue-3472", issue3472],
-  ["pdf-only-menu-items", pdfOnlyMenuItems],
   ["pdf-tools-encrypted", pdfToolsEncrypted],
   ["pdf-decrypt-remembered-key", pdfDecryptRememberedKey],
   ["security-ghsa-p2ph-2rvm-q37m", ghsaP2ph2rvmQ37m],
