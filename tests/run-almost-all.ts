@@ -582,6 +582,7 @@ export const tests: NamedTest[] = [
   // mouse, so it is the one test that cares what the machine was doing before
   ["issue-5978", issue5978],
   ["issue-6236", issue6236],
+  ["issue-6055", issue6055],
   ["pdf-only-menu-items", pdfOnlyMenuItems],
   ["session-restore-search", sessionRestoreSearch],
   ["issue-6412", issue6412],
@@ -819,7 +820,6 @@ export const tests: NamedTest[] = [
   ["find-ui-state", findUiState],
   ["goto-page-word-after-find", gotoPageWordAfterFind],
   ["issue-5874", issue5874],
-  ["issue-6055", issue6055],
   ["issue-5869", issue5869],
   ["issue-5881", issue5881],
   ["rect-selection-drag", rectSelectionDrag],
