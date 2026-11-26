@@ -7,7 +7,7 @@
 import { join } from "node:path";
 import { ControlClient, ControlCommand, withControlledSumatra } from "./control.ts";
 import { EXE, ROOT, cmdId, runStandalone, SLOW_BUILD_FACTOR } from "./util.ts";
-import { FRAME_CLASS, sendCommandSync } from "./win-automation.ts";
+import { FRAME_CLASS, openAIChat } from "./win-automation.ts";
 import {
   captureWindowDCRegionPixels,
   enumChildWindows,
@@ -80,7 +80,7 @@ export async function testit(): Promise<void> {
       await client.waitForRenderIdle();
       await client.setNotificationsEnabled(false);
 
-      sendCommandSync(frame, cmdId("CmdAIChatWithClaudeCode"));
+      await openAIChat(frame, proc.pid!, cmdId("CmdAIChatWithClaudeCode"));
       await sleep(200 * SLOW_BUILD_FACTOR);
       postMessage(frame, WM_KEYDOWN, VK_ESCAPE, 0);
 

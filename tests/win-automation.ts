@@ -245,6 +245,23 @@ export function sendCommandSync(hwnd: number, id: number): void {
   sendMessage(hwnd, WM_COMMAND, id, 0);
 }
 
+const TDM_CLICK_BUTTON = 0x0400 + 102; // WM_USER + 102
+const IDOK = 1;
+const DIALOG_CLASS = "#32770";
+
+// Opens an AI chat panel. A missing provider (CI runners) shows a modal task
+// dialog that a blocking SendMessage would wait on forever: click its OK.
+// Returns false when that dialog appeared.
+export async function openAIChat(frame: number, pid: number, cmd: number): Promise<boolean> {
+  postMessage(frame, WM_COMMAND, cmd, 0);
+  const dlg = await waitForTopWindow(pid, DIALOG_CLASS, 1500 * SLOW_BUILD_FACTOR);
+  if (!dlg) {
+    return true;
+  }
+  postMessage(dlg, TDM_CLICK_BUTTON, IDOK, 0);
+  return false;
+}
+
 export async function waitForTitle(frame: number, pred: (title: string) => boolean, timeoutMs = 8000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let last = "";

@@ -3,7 +3,7 @@
 import { join } from "node:path";
 import { IS_MAC } from "./host.ts";
 import { cmdId, dpiRequest, requireDpiShrank, ROOT, runStandalone, waitForDpiFrame, writeAppdata } from "./util.ts";
-import { killAndWait, launchControlled, sendCommandSync } from "./win-automation.ts";
+import { killAndWait, launchControlled, openAIChat, sendCommandSync } from "./win-automation.ts";
 
 function toggleTo150(frame: number): void {
   sendCommandSync(frame, cmdId("CmdDebugToggleDpiOverride")); // system -> 125%
@@ -48,7 +48,7 @@ export async function testit(): Promise<void> {
     sendCommandSync(find.frame, cmdId("CmdFindFirst"));
     // This creates the panel when Claude and WebView2 are available; the DPI
     // assertions below stay optional so hosted runners without them can pass.
-    sendCommandSync(find.frame, cmdId("CmdAIChatWithClaudeCode"));
+    await openAIChat(find.frame, find.proc.pid!, cmdId("CmdAIChatWithClaudeCode"));
     const high = await waitForDpiFrame(find.client, 144, (s) => (s.find ?? 0) > 0);
     toggleTo75(find.frame);
     const low = await waitForDpiFrame(find.client, 72, (s) => (s.find ?? 0) > 0);
