@@ -11,7 +11,7 @@
 import { writeFileSync } from "node:fs";
 import { ControlCommand, type ControlClient } from "./control.ts";
 import { IS_WIN } from "./host.ts";
-import { assemblePdf, cmdId, runStandalone, tmpPath, USE_NG } from "./util.ts";
+import { assemblePdf, cmdId, runStandalone, tmpPath, USE_NG, writeAppdata } from "./util.ts";
 import { findCanvas, killAndWait, launchControlled, sendCommand } from "./win-automation.ts";
 import { captureWindowPixels, postMessage, sleep, WM_KEYDOWN } from "./winapi.ts";
 
@@ -161,7 +161,18 @@ export async function testit(): Promise<void> {
 async function testSinglePageAndGutter(): Promise<void> {
   const pdf = tmpPath("read-columns-text.pdf");
   writeFileSync(pdf, makeTextColumnsPdf(), "latin1");
-  const { proc, client, frame } = await launchControlled(["-view", "single page", "-zoom", "fit page", pdf]);
+  // a Skeuomorph Page Turn keeps the old page on screen while it flies; the
+  // pixels read here are of the column view, not of the Curl
+  const appdata = writeAppdata("read-columns", "SkeuomorphPageTurn = false");
+  const { proc, client, frame } = await launchControlled([
+    "-appdata",
+    appdata,
+    "-view",
+    "single page",
+    "-zoom",
+    "fit page",
+    pdf,
+  ]);
   try {
     await client.waitForRenderIdle();
     await client.setNotificationsEnabled(false);
