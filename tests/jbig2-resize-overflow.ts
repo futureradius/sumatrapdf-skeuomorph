@@ -2,34 +2,9 @@
 // Compiles the vendored decoder; does not build SumatraPDF.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, runStandalone, tmpPath } from "./util.ts";
-
-function vcvarsPath(): string {
-  const vswhere = join(
-    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
-    "Microsoft Visual Studio",
-    "Installer",
-    "vswhere.exe",
-  );
-  if (!existsSync(vswhere)) {
-    return "";
-  }
-  const found = spawnSync(
-    vswhere,
-    ["-latest", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
-    {
-      encoding: "utf8",
-    },
-  );
-  const root = found.stdout.trim();
-  if (found.status !== 0 || !root) {
-    return "";
-  }
-  const bat = join(root, "VC", "Auxiliary", "Build", "vcvarsall.bat");
-  return existsSync(bat) ? bat : "";
-}
+import { ROOT, runStandalone, tmpPath, vcvarsPath } from "./util.ts";
 
 function compileAndRun(vcvars: string, arch: "x64" | "x86"): void {
   const out = tmpPath(`jbig2-resize-${arch}.exe`);

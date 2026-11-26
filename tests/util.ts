@@ -507,6 +507,55 @@ export function tmpPath(name: string): string {
   return join(TMP_DIR, name);
 }
 
+// vcvarsall.bat of the newest Visual Studio with C++ tools ("" if none)
+export function vcvarsPath(): string {
+  const vswhere = join(
+    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+    "Microsoft Visual Studio",
+    "Installer",
+    "vswhere.exe",
+  );
+  if (!existsSync(vswhere)) {
+    return "";
+  }
+  const found = Bun.spawnSync([
+    vswhere,
+    "-latest",
+    "-products",
+    "*",
+    "-requires",
+    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+    "-property",
+    "installationPath",
+  ]);
+  const root = found.stdout.toString().trim();
+  if (found.exitCode !== 0 || !root) {
+    return "";
+  }
+  const bat = join(root, "VC", "Auxiliary", "Build", "vcvarsall.bat");
+  return existsSync(bat) ? bat : "";
+}
+
+// Runs x64 cl.exe: from PATH when there (a dev prompt), else through
+// vcvarsall.bat (CI runners don't put cl on PATH). Throws on failure.
+export function runCl(args: string[]): void {
+  let cmd = ["cl", ...args];
+  if (!Bun.which("cl")) {
+    const vcvars = vcvarsPath();
+    if (!vcvars) {
+      throw new Error("cl.exe not on PATH and no Visual Studio C++ tools found");
+    }
+    const bat = tmpPath(`run-cl-${process.pid}.bat`);
+    const quoted = args.map((a) => `"${a}"`).join(" ");
+    writeFileSync(bat, [`@echo off`, `call "${vcvars}" x64 >nul`, `cl ${quoted}`, ``].join("\r\n"));
+    cmd = ["cmd.exe", "/d", "/c", bat];
+  }
+  const p = Bun.spawnSync(cmd);
+  if (p.exitCode !== 0) {
+    throw new Error(`cl failed (${p.exitCode})\n${p.stdout.toString()}${p.stderr.toString()}`);
+  }
+}
+
 export function crc32(buf: Uint8Array): number {
   let c = 0xffffffff;
   for (const b of buf) {
