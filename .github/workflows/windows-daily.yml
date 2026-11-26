@@ -82,7 +82,7 @@ jobs:
         with:
           name: test-output
           path: |
-            tests/tmp
+            .work/tests-tmp
             .work/test-times.txt
           if-no-files-found: ignore
           retention-days: 7
