@@ -393,7 +393,7 @@ void DetectBeforeSpread(MainWindow* win, DisplayModel* dm) {
     if (wt->gate == Skip::None) {
         CurlCopyOld(win, SpreadOnScreen(dm));
     }
-    uitask::Post(MkFunc0<MainWindow>(FinishTurn, win), "PageTurnFinish");
+    PostForWindow(win, FinishTurn, "PageTurnFinish");
 }
 
 // an unflushed paint left the old screen up: keep the old fingerprint
