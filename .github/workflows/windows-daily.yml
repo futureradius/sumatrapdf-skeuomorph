@@ -68,6 +68,16 @@ jobs:
       - name: Run unit tests
         run: .\out\dbg64_asan\SumatraPDF-static.exe -unit-tests -for-ai
 
+      # the runner's screen is 1024x768: tests that size windows beyond it get
+      # them clamped to the work area
+      - name: Set screen resolution
+        continue-on-error: true
+        shell: powershell
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+
       # run-github-ci.ts runs every test that can run here, doesn't stop at the
       # first failure, and exits non-zero if any failed
       - name: Run tests
