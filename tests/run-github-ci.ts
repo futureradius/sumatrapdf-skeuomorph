@@ -25,6 +25,9 @@ import { EXE, formatDuration, resetTestTimes, runTest, type NamedTest } from "./
 import { getWorkArea, setTestWindowLayout, testWindowPos } from "./winapi.ts";
 import { tests as allTests } from "./run-all.ts";
 
+// narrower work areas run the tests full-screen instead of in the right half
+const kMinRightHalfDx = 1600;
+
 // Tests that need something a hosted runner doesn't have. Keep the reason with
 // the name: it is what tells the next person whether it is still true.
 export const excludedTests: Record<string, string> = {
@@ -58,10 +61,12 @@ type Failure = { name: string; msg: string };
 // tests defaults to every test that can run here; pass a list to run a subset
 // (a smoke check of this runner, or reproducing one CI failure locally)
 export async function testit(tests: NamedTest[] = ciTests()): Promise<void> {
-  setTestWindowLayout("workArea");
+  // the workflow raises the screen to 1920x1080; a runner left at 1024x768
+  // needs all of it
+  const wa = getWorkArea();
+  setTestWindowLayout(wa.right - wa.left < kMinRightHalfDx ? "workArea" : "rightHalf");
   resetTestTimes();
 
-  const wa = getWorkArea();
   const pos = testWindowPos();
   console.log(`exe:       ${EXE}`);
   console.log(`work area: ${wa.right - wa.left}x${wa.bottom - wa.top}`);
