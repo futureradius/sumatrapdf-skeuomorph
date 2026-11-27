@@ -4,6 +4,19 @@ import { delimiter, join } from "node:path";
 import { ControlCommand, withControlledSumatra } from "./control.ts";
 import { EXE, ROOT, runCl, runStandalone, tmpPath, writeAppdata } from "./util.ts";
 
+// Windows env keys are case-insensitive: started from PowerShell the key is
+// "Path", and adding "PATH" next to it leaves the child the old value
+function envWithPathFirst(dir: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.toUpperCase() !== "PATH") {
+      env[k] = v;
+    }
+  }
+  env.PATH = dir + delimiter + (process.env.PATH ?? "");
+  return env;
+}
+
 export async function testit(): Promise<void> {
   if (process.platform !== "win32") return;
   if ([".codex", ".local"].some((root) => existsSync(join(homedir(), root, "bin", "codex.exe")))) {
@@ -57,7 +70,7 @@ export async function testit(): Promise<void> {
       if (!String(refreshed[1]).includes("fresh-catalog-model")) failures.push(`refresh: ${refreshed[1]}`);
     },
     ["-appdata", appdata],
-    { env: { ...process.env, PATH: dir + delimiter + process.env.PATH, CODEX_HOME: dir } },
+    { env: { ...envWithPathFirst(dir), CODEX_HOME: dir } },
   );
   if (failures.length) throw new Error(failures.join("\n"));
 }
