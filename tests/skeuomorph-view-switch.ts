@@ -62,7 +62,12 @@ async function shownPages(client: ControlClient): Promise<string> {
   const pages = raw
     .split("\n")
     .filter((l) => l.startsWith("page n=") && l.includes(" shown=1 "))
-    .map((l) => l.replace(/^page /, "").replace(" shown=1", "").trim());
+    .map((l) =>
+      l
+        .replace(/^page /, "")
+        .replace(" shown=1", "")
+        .trim(),
+    );
   return pages.join(" ; ") || "(no page shown)";
 }
 
