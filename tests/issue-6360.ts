@@ -7,7 +7,7 @@
 
 import { writeFileSync } from "node:fs";
 import { ControlClient, ControlCommand } from "./control.ts";
-import { assemblePdf, cmdId, runStandalone, tmpPath, USE_NG } from "./util.ts";
+import { assemblePdf, cmdId, runStandalone, SLOW_BUILD_FACTOR, tmpPath, USE_NG } from "./util.ts";
 import {
   clientToScreen,
   clipboardSeqNo,
@@ -77,7 +77,7 @@ async function copyImageFromMenu(client: ControlClient, frame: number): Promise<
     const x = +m[1]! + Math.floor(+m[3]! / 2);
     const y = +m[2]! + Math.floor(+m[4]! / 2);
     await client.request(ControlCommand.TestInput, ["click", x, y, 1, 0]);
-    const deadline = Date.now() + 3000;
+    const deadline = Date.now() + 3000 * SLOW_BUILD_FACTOR;
     while (!/ popup=1/.test(await uiState(client))) {
       if (Date.now() > deadline) {
         throw new Error("issue-6360: context menu did not open");
@@ -93,7 +93,7 @@ async function copyImageFromMenu(client: ControlClient, frame: number): Promise<
   const cr = getClientRect(canvas);
   const pt = clientToScreen(canvas, Math.floor(cr.right / 2), Math.floor(cr.bottom / 2));
   openContextMenu(canvas, pt.x, pt.y);
-  const popup = await waitForContextMenu(3000);
+  const popup = await waitForContextMenu(3000 * SLOW_BUILD_FACTOR);
   if (!popup) {
     throw new Error("issue-6360: context menu did not open");
   }
