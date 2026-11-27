@@ -581,6 +581,7 @@ export const tests: NamedTest[] = [
   // first: it drives the home page, whose thumbnail selection follows the
   // mouse, so it is the one test that cares what the machine was doing before
   ["issue-5978", issue5978],
+  ["replace-image", replaceImage],
   ["issue-6360", issue6360],
   ["issue-4839", issue4839],
   ["read-columns", readColumns],
@@ -1090,7 +1091,6 @@ export const tests: NamedTest[] = [
   ["toolbar-wrap", toolbarWrap],
   ["reopen-closed-window", reopenClosedWindow],
   ["tab-group-autosync", tabGroupAutoSync],
-  ["replace-image", replaceImage],
   ["issue-6486", issue6486],
   ["issue-6487", issue6487],
   ["issue-6488", issue6488],

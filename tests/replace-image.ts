@@ -11,7 +11,7 @@
 import { copyFileSync, writeFileSync } from "node:fs";
 import { ControlCommand, type ControlClient } from "./control.ts";
 import { IS_WIN } from "./host.ts";
-import { assemblePdf, makePng, runStandalone, tmpPath, USE_NG } from "./util.ts";
+import { assemblePdf, makePng, runStandalone, SLOW_BUILD_FACTOR, tmpPath, USE_NG } from "./util.ts";
 import {
   findCanvas,
   findSubMenu,
@@ -73,6 +73,20 @@ async function waitColor(client: ControlClient, frame: number, want: Color, what
   throw new Error(`replace-image: ${what}: expected the image to be ${want}, it is ${got}`);
 }
 
+const kSaveTries = 3;
+
+async function sawColor(client: ControlClient, frame: number, want: Color, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await client.waitForRenderIdle();
+    if (dominantColor(frame) === want) {
+      return true;
+    }
+    await sleep(150);
+  }
+  return false;
+}
+
 async function image(client: ControlClient, action: string, path = ""): Promise<string> {
   const res = await client.request(ControlCommand.TestImageReplace, [action, 1, 0, path]);
   return String(res[1] ?? "");
@@ -115,8 +129,17 @@ export async function testit(): Promise<void> {
     if (!tmp) {
       throw new Error(`replace-image: no temporary file to edit: ${edit}`);
     }
-    writeFileSync(tmp, makePng(4, 4, [0, 255, 0]));
-    await waitColor(client, frame, "green", "after the other app saved");
+    // the app starts watching the file on another thread, so a save right
+    // after "edit" can come before it watches: save again until it shows
+    const green = makePng(4, 4, [0, 255, 0]);
+    let saved = false;
+    for (let i = 0; i < kSaveTries && !saved; i++) {
+      writeFileSync(tmp, green);
+      saved = await sawColor(client, frame, "green", 2000 * SLOW_BUILD_FACTOR);
+    }
+    if (!saved) {
+      await waitColor(client, frame, "green", "after the other app saved");
+    }
 
     await client.request(ControlCommand.TestInvokeCommand, ["CmdUndo"]);
     await waitColor(client, frame, "blue", "after Undo");
